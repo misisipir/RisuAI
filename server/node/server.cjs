@@ -546,7 +546,7 @@ app.post('/api/patch', async (req, res, next) => {
         }
         
         // Apply patch to in-memory database
-        const result = applyPatch(dbCache[filePath], patch, true);
+        const result = applyPatch(dbCache[filePath], patch, false);
         
         // Increment version after successful patch
         dbVersions[filePath]++;
@@ -587,7 +587,7 @@ app.post('/api/patch', async (req, res, next) => {
             newVersion: newVersion
         });
     } catch (error) {
-        console.error(`[Patch] Error applying patch to ${filePath}:`, error);
+        console.error(`[Patch] Error applying patch to ${filePath}:`, error.name);
         res.status(500).send({
             error: 'Patch application failed: ' + (error && error.message ? error.message : error)
         });
