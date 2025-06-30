@@ -366,13 +366,16 @@ app.get('/api/read', async (req, res, next) => {
         
         // write to disk if available in cache
         if (dbCache[filePath]) {
-            const decodedFilePath = Buffer.from(filePath, 'hex').toString('utf-8');
-            let dataToSave = await encodeRisuSaveServer(dbCache[filePath]);
-            await fs.writeFile(fullPath, dataToSave);
+            try {
+                let dataToSave = await encodeRisuSaveServer(dbCache[filePath]);
+                await fs.writeFile(fullPath, dataToSave);
+            } catch (error) {
+                console.error(`[Read] Error saving ${filePath}:`, error);
+            }
+            delete dbCache[filePath];
         }
-        
-        // Clear cache and reset version after read operation
-        if (dbCache[filePath]) delete dbCache[filePath];
+
+        // reset version after read operation
         dbVersions[filePath] = 0;
         
         // read from disk
@@ -575,6 +578,7 @@ app.post('/api/patch', async (req, res, next) => {
                     }
                 }
             } catch (error) {
+                dbVersions[filePath] = 0; // reset version on save error, trigger full save next time
                 console.error(`[Patch] Error saving ${filePath}:`, error);
             } finally {
                 delete saveTimers[filePath];
