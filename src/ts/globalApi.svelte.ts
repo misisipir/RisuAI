@@ -45,8 +45,6 @@ import { moduleUpdate } from "./process/modules";
 import type { AccountStorage } from "./storage/accountStorage";
 import { makeColdData } from "./process/coldstorage.svelte";
 import { compare } from 'fast-json-patch'
-import { canonicalize } from 'json-canonicalize'
-import { crc32 } from 'crc';
 
 //@ts-ignore
 export const isTauri = !!window.__TAURI_INTERNALS__
@@ -318,9 +316,68 @@ export async function loadAsset(id:string){
 }
 
 let lastSave = ''
-// Note: tracked db and hash must be in canonical form for patching to work correctly
 let lastSyncedDb: any = null
 let lastSyncHash = ''
+
+// Compositional hash function for JSON objects in O(n)
+function compositionalHash(obj: any): string {
+    const PRIME_MULTIPLIER = 31;
+    
+    const SEED_OBJECT = 17;
+    const SEED_ARRAY = 19;
+    const SEED_STRING = 23;
+    const SEED_NUMBER = 29;
+    const SEED_BOOLEAN = 31;
+    const SEED_NULL = 37;
+    
+    function calculateHash(node: any): number {
+        if (node === null || node === undefined) return SEED_NULL;
+
+        switch (typeof node) {
+            case 'object':
+                if (Array.isArray(node)) {
+                    let arrayHash = SEED_ARRAY;
+                    for (const item of node)
+                        arrayHash = (Math.imul(arrayHash, PRIME_MULTIPLIER) + calculateHash(item)) >>> 0;
+                    return arrayHash;
+                } else {
+                    let objectHash = SEED_OBJECT;
+                    for (const key in node)
+                        objectHash = (objectHash ^ (Math.imul(calculateHash(key), PRIME_MULTIPLIER) + calculateHash(node[key]))) >>> 0;
+                    return objectHash;
+                }
+
+            case 'string':
+                let strHash = 2166136261;
+                for (let i = 0; i < node.length; i++)
+                    strHash = Math.imul(strHash ^ node.charCodeAt(i), 16777619);
+                return Math.imul(SEED_STRING, PRIME_MULTIPLIER) + (strHash >>> 0);
+
+            case 'number':
+                let numHash;
+                if (Number.isInteger(node) && node >= -2147483648 && node <= 2147483647) 
+                    numHash = node >>> 0; 
+                else {
+                    const str = node.toString();
+                    numHash = 2166136261;
+                    for (let i = 0; i < str.length; i++) 
+                        numHash = Math.imul(numHash ^ str.charCodeAt(i), 16777619);
+                    numHash = numHash >>> 0;
+                }
+                return Math.imul(SEED_NUMBER, PRIME_MULTIPLIER) + numHash;
+
+            case 'boolean':
+                return Math.imul(SEED_BOOLEAN, PRIME_MULTIPLIER) + (node ? 1 : 0);
+                
+            default:
+                return 0;
+        }
+    }
+    
+    const hash = calculateHash(obj);
+    return hash.toString(16); 
+}
+
 export let saving = $state({
     state: false
 })
@@ -329,17 +386,14 @@ export let saving = $state({
  * Attempts to save database changes using patch synchronization.
  * @returns {Promise<boolean>} Returns true if patch was successfully applied or no changes exist, false if full save is required.
  */
-async function tryPatchSave(db: Database): Promise<boolean> {
+async function tryPatchSave(db: any): Promise<boolean> {
     // Initial save cannot use patch, so return false to trigger full save.
     if (lastSyncedDb === null) {
         return false;
     }
 
     try {
-        const newDbString = canonicalize(db);
-        const newDb = JSON.parse(newDbString);
-
-        const patch = compare(lastSyncedDb, newDb);
+        const patch = compare(lastSyncedDb, db);
         if (patch.length > 0) {
             const success = await forageStorage.patchItem('database/database.bin', {
                 patch: patch,
@@ -438,7 +492,7 @@ export async function saveDb(){
                 if(!forageStorage.isAccount){                    
                     // Patch-based sync for Node server                    
                     if (isNodeServer && supportsPatchSync) {
-                        const dbSnapshot = $state.snapshot(db) as Database;
+                        const dbSnapshot = JSON.parse(JSON.stringify(db));
                         const patchSuccessful = await tryPatchSave(dbSnapshot);
 
                         // If this is the first save or patch failed, fall back to full save.
@@ -448,10 +502,9 @@ export async function saveDb(){
                             await forageStorage.setItem(`database/dbbackup-${(Date.now()/100).toFixed()}.bin`, dbData);
                         }
 
-                        // Update last synced database and hash
-                        const dbString = canonicalize(dbSnapshot);
-                        lastSyncHash = crc32(dbString).toString(16);
-                        lastSyncedDb = JSON.parse(dbString);
+                        // Update last synced database and hash using compositional hash
+                        lastSyncedDb = dbSnapshot;
+                        lastSyncHash = compositionalHash(dbSnapshot);
                     } else {
                         // Standard save method for environments that don't support patches 
                         const dbData = encodeRisuSaveLegacy(db);
@@ -625,10 +678,9 @@ export async function loadData() {
                     const decoded = await decodeRisuSave(gotStorage)
                     console.log(decoded)
                     setDatabase(decoded)
-                    // Initialize hash tracking
-                    const dbString = canonicalize(decoded);
-                    lastSyncHash = crc32(dbString).toString(16);
-                    lastSyncedDb = JSON.parse(dbString)
+                    // Initialize compositional hash tracking
+                    lastSyncedDb = JSON.parse(JSON.stringify(decoded))
+                    lastSyncHash = compositionalHash(lastSyncedDb);
                 } catch (error) {
                     console.error(error)
                     const backups = await getDbBackups()
