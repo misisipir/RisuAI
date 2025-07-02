@@ -6,6 +6,7 @@ const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('fs');
 const fs = require('fs/promises')
 const crypto = require('crypto')
 const { applyPatch } = require('fast-json-patch')
+const  { canonicalize }  = require('json-canonicalize')
 const { Packr, Unpackr, decode } = require('msgpackr')
 const fflate = require('fflate')
 app.use(express.static(path.join(process.cwd(), 'dist'), {index: false}));
@@ -30,9 +31,8 @@ if (enablePatchSync) {
     }
 }
 
-// In-memory database cache for patch-based sync with versioning
+// In-memory database cache for patch-based sync
 let dbCache = {}
-let dbVersions = {} // Track version numbers for each file
 let saveTimers = {}
 const SAVE_INTERVAL = 5000 // Save to disk after 5 seconds of inactivity
 
@@ -393,9 +393,6 @@ app.get('/api/read', async (req, res, next) => {
             delete dbCache[filePath];
         }
 
-        // reset version after read operation
-        dbVersions[filePath] = 0;
-        
         // read from disk
         if(!existsSync(path.join(savePath, filePath))){
             res.send();
@@ -488,15 +485,16 @@ app.post('/api/write', async (req, res, next) => {
 
     try {
         await fs.writeFile(path.join(savePath, filePath), fileContent);
-        // Clear cache for this file since it was directly written
-        if (dbCache[filePath]) delete dbCache[filePath];
+        
         // Clear any pending save timer for this file
         if (saveTimers[filePath]) {
             clearTimeout(saveTimers[filePath]);
             delete saveTimers[filePath];
         }
-        // Reset version to 0 after direct write
-        dbVersions[filePath] = 0;
+
+        // Clear cache for this file since it was directly written
+        if (dbCache[filePath]) delete dbCache[filePath];
+
         res.send({
             success: true
         });
@@ -523,11 +521,11 @@ app.post('/api/patch', async (req, res, next) => {
     }
     const filePath = req.headers['file-path'];
     const patch = req.body.patch;
-    const clientVersion = parseInt(req.body.expectedVersion) || 0;
+    const expectedHash = req.body.expectedHash;
     
-    if (!filePath || !patch) {
+    if (!filePath || !patch || !expectedHash) {
         res.status(400).send({
-            error:'File path and patch required'
+            error:'File path, patch, and expected hash required'
         });
         return;
     }
@@ -541,37 +539,33 @@ app.post('/api/patch', async (req, res, next) => {
     try {
         const decodedFilePath = Buffer.from(filePath, 'hex').toString('utf-8');
         
-        // Initialize version if not exists
-        if (!dbVersions[filePath]) dbVersions[filePath] = 0;
-        
-        // Check version mismatch
-        const serverVersion = dbVersions[filePath];
-        if (clientVersion !== serverVersion) {
-            console.log(`[Patch] Version mismatch for ${decodedFilePath}: client=${clientVersion}, server=${serverVersion}`);
-            res.status(409).send({
-                error: 'Version mismatch',
-            });
-            return;
-        }
-        
         // Load database into memory if not already cached
         if (!dbCache[filePath]) {
             const fullPath = path.join(savePath, filePath);
             if (existsSync(fullPath)) {
                 const fileContent = await fs.readFile(fullPath);
-                dbCache[filePath] = await decodeRisuSaveServer(fileContent);
+                dbCache[filePath] = JSON.parse(canonicalize(await decodeRisuSaveServer(fileContent)));
             } 
             else {
                 dbCache[filePath] = {};
             }
         }
         
+        // Calculate current hash of the server data
+        const currentDataString = canonicalize(dbCache[filePath]);
+        const serverHash = crypto.createHash('sha256').update(currentDataString, 'utf-8').digest('hex');
+        
+        // Check hash mismatch
+        if (expectedHash !== serverHash) {
+            console.log(`[Patch] Hash mismatch for ${decodedFilePath}: expected=${expectedHash.substring(0, 16)}..., server=${serverHash.substring(0, 16)}...`);
+            res.status(409).send({
+                error: 'Hash mismatch - data out of sync',
+            });
+            return;
+        }
+        
         // Apply patch to in-memory database
         const result = applyPatch(dbCache[filePath], patch, false);
-        
-        // Increment version after successful patch
-        dbVersions[filePath]++;
-        const newVersion = dbVersions[filePath];
 
         // Schedule save to disk (debounced)
         if (saveTimers[filePath]) {
@@ -596,7 +590,6 @@ app.post('/api/patch', async (req, res, next) => {
                     }
                 }
             } catch (error) {
-                dbVersions[filePath] = 0; // reset version on save error, trigger full save next time
                 console.error(`[Patch] Error saving ${filePath}:`, error);
             } finally {
                 delete saveTimers[filePath];
@@ -606,7 +599,6 @@ app.post('/api/patch', async (req, res, next) => {
         res.send({
             success: true,
             appliedOperations: result.length,
-            newVersion: newVersion
         });
     } catch (error) {
         console.error(`[Patch] Error applying patch to ${filePath}:`, error.name);

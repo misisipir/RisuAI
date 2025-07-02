@@ -79,7 +79,7 @@ export class NodeStorage{
         }
     }
 
-    async patchItem(key: string, patchData: {patch: any[], expectedVersion: number}): Promise<boolean> {
+    async patchItem(key: string, patchData: {patch: any[], expectedHash: string}): Promise<boolean> {
         await this.checkAuth()
         
         const da = await fetch('/api/patch', {
@@ -93,8 +93,7 @@ export class NodeStorage{
         })
         
         if(da.status === 409) {
-            // Version mismatch - throw specific error for client to handle
-            throw new Error('Version mismatch')
+            throw new Error('Hash mismatch')
         }
         
         if(da.status < 200 || da.status >= 300){

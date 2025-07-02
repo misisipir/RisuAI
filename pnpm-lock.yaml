@@ -146,6 +146,9 @@ importers:
       html-to-image:
         specifier: ^1.11.11
         version: 1.11.11
+      json-canonicalize:
+        specifier: ^2.0.0
+        version: 2.0.0
       jszip:
         specifier: ^3.10.1
         version: 3.10.1
@@ -2459,6 +2462,9 @@ packages:
 
   js-tokens@4.0.0:
     resolution: {integrity: sha512-RdJUflcE3cUzKiMqQgsCu06FPu9UdIJO0beYbPhHN4k6apgJtifcoCtT9bcxOpYBtpD2kCM6Sbzg4CausW/PKQ==}
+
+  json-canonicalize@2.0.0:
+    resolution: {integrity: sha512-yyrnK/mEm6Na3ChbJUWueXdapueW0p380RUyTW87XGb1ww8l8hU0pRrGC3vSWHe9CxrbPHX2fGUOZpNiHR0IIg==}
 
   json-parse-better-errors@1.0.2:
     resolution: {integrity: sha512-mrqyZKfX5EhL7hvqcV6WG1yYjnjeuYDzDhhcAAUrq8Po85NBQBJP+ZDUT75qZQ98IkUoBqdkExkukOU7Ts2wrw==}
@@ -6125,6 +6131,8 @@ snapshots:
   jiti@1.21.0: {}
 
   js-tokens@4.0.0: {}
+
+  json-canonicalize@2.0.0: {}
 
   json-parse-better-errors@1.0.2: {}
 

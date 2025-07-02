@@ -45,7 +45,7 @@ import { moduleUpdate } from "./process/modules";
 import type { AccountStorage } from "./storage/accountStorage";
 import { makeColdData } from "./process/coldstorage.svelte";
 import { compare } from 'fast-json-patch'
-
+import { canonicalize } from 'json-canonicalize'
 //@ts-ignore
 export const isTauri = !!window.__TAURI_INTERNALS__
 //@ts-ignore
@@ -316,8 +316,9 @@ export async function loadAsset(id:string){
 }
 
 let lastSave = ''
+// Note: tracked db and hash must be in canonical form for patching to work correctly
 let lastSyncedDb: any = null
-let dbVersion = 0 // Track local database version for patch sync
+let lastSyncHash = ''
 export let saving = $state({
     state: false
 })
@@ -333,27 +334,19 @@ async function tryPatchSave(db: Database): Promise<boolean> {
     }
 
     try {
-        const serializedDb = $state.snapshot(db);
-        const patch = compare(lastSyncedDb, serializedDb);
+        const newDbString = canonicalize(db);
+        const newDb = JSON.parse(newDbString);
 
+        const patch = compare(lastSyncedDb, newDb);
         if (patch.length > 0) {
             const success = await forageStorage.patchItem('database/database.bin', {
                 patch: patch,
-                expectedVersion: dbVersion
+                expectedHash: lastSyncHash
             });
-
-            if (success) {
-                lastSyncedDb = serializedDb;
-                dbVersion++;
-                console.log(`[Patch] Successfully applied patch, new version: ${dbVersion}`);
-                return true;
-            }
-            console.warn('[Patch] Patch failed, falling back to full save');
-            return false;
+            return success;
         }
         return true; // No changes detected, treat as success
     } catch (error) {
-        console.error('[Patch] Error during patch attempt:', error);
         return false; // Fall back to full save on error
     }
 }
@@ -443,19 +436,23 @@ export async function saveDb(){
                 if(!forageStorage.isAccount){                    
                     // Patch-based sync for Node server                    
                     if (isNodeServer && supportsPatchSync) {
-                        const patchSuccessful = await tryPatchSave(db);
+                        const dbSnapshot = $state.snapshot(db) as Database;
+                        const patchSuccessful = await tryPatchSave(dbSnapshot);
 
                         // If this is the first save or patch failed, fall back to full save.
                         if (!patchSuccessful) {
-                            const dbData = encodeRisuSaveLegacy(db);
+                            const dbData = encodeRisuSaveLegacy(dbSnapshot);
                             await forageStorage.setItem('database/database.bin', dbData);
                             await forageStorage.setItem(`database/dbbackup-${(Date.now()/100).toFixed()}.bin`, dbData);
-
-                            // (Re)initialize patch tracking state after full save.
-                            lastSyncedDb = $state.snapshot(db);
-                            dbVersion = 0;
-                            console.log('[Patch] Full save completed, patch tracking (re)initialized.');
                         }
+
+                        // Update last synced database and hash
+                        const dbString = canonicalize(dbSnapshot);
+                        const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(dbString));
+                        lastSyncHash = Array.from(new Uint8Array(hash))
+                            .map(b => b.toString(16).padStart(2, '0'))
+                            .join('');
+                        lastSyncedDb = JSON.parse(dbString);
                     } else {
                         // Standard save method for environments that don't support patches 
                         const dbData = encodeRisuSaveLegacy(db);
@@ -629,8 +626,13 @@ export async function loadData() {
                     const decoded = await decodeRisuSave(gotStorage)
                     console.log(decoded)
                     setDatabase(decoded)
-                    lastSyncedDb = $state.snapshot(decoded)
-                    dbVersion = 0 // Initialize version tracking
+                    // Initialize hash tracking
+                    const dbString = canonicalize(decoded);
+                    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(dbString));
+                    lastSyncHash = Array.from(new Uint8Array(hash))
+                        .map(b => b.toString(16).padStart(2, '0'))
+                        .join('');
+                    lastSyncedDb = JSON.parse(dbString)
                 } catch (error) {
                     console.error(error)
                     const backups = await getDbBackups()
