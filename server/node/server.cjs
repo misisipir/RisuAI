@@ -5,6 +5,7 @@ const htmlparser = require('node-html-parser');
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('fs');
 const fs = require('fs/promises')
 const crypto = require('crypto')
+const crc32 = require('crc/crc32')
 const { applyPatch } = require('fast-json-patch')
 const  { canonicalize }  = require('json-canonicalize')
 const { Packr, Unpackr, decode } = require('msgpackr')
@@ -553,7 +554,7 @@ app.post('/api/patch', async (req, res, next) => {
         
         // Calculate current hash of the server data
         const currentDataString = canonicalize(dbCache[filePath]);
-        const serverHash = crypto.createHash('sha256').update(currentDataString, 'utf-8').digest('hex');
+        const serverHash = crc32(currentDataString).toString(16);
         
         // Check hash mismatch
         if (expectedHash !== serverHash) {

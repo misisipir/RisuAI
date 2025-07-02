@@ -46,6 +46,8 @@ import type { AccountStorage } from "./storage/accountStorage";
 import { makeColdData } from "./process/coldstorage.svelte";
 import { compare } from 'fast-json-patch'
 import { canonicalize } from 'json-canonicalize'
+import { crc32 } from 'crc';
+
 //@ts-ignore
 export const isTauri = !!window.__TAURI_INTERNALS__
 //@ts-ignore
@@ -448,10 +450,7 @@ export async function saveDb(){
 
                         // Update last synced database and hash
                         const dbString = canonicalize(dbSnapshot);
-                        const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(dbString));
-                        lastSyncHash = Array.from(new Uint8Array(hash))
-                            .map(b => b.toString(16).padStart(2, '0'))
-                            .join('');
+                        lastSyncHash = crc32(dbString).toString(16);
                         lastSyncedDb = JSON.parse(dbString);
                     } else {
                         // Standard save method for environments that don't support patches 
@@ -628,10 +627,7 @@ export async function loadData() {
                     setDatabase(decoded)
                     // Initialize hash tracking
                     const dbString = canonicalize(decoded);
-                    const hash = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(dbString));
-                    lastSyncHash = Array.from(new Uint8Array(hash))
-                        .map(b => b.toString(16).padStart(2, '0'))
-                        .join('');
+                    lastSyncHash = crc32(dbString).toString(16);
                     lastSyncedDb = JSON.parse(dbString)
                 } catch (error) {
                     console.error(error)
