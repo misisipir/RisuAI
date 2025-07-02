@@ -565,7 +565,7 @@ app.post('/api/patch', async (req, res, next) => {
         }
         
         // Apply patch to in-memory database
-        const result = applyPatch(dbCache[filePath], patch, false);
+        const result = applyPatch(dbCache[filePath], patch, true);
 
         // Schedule save to disk (debounced)
         if (saveTimers[filePath]) {
