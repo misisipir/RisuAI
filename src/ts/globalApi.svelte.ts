@@ -377,6 +377,31 @@ function compositionalHash(obj: any): string {
     const hash = calculateHash(obj);
     return hash.toString(16); 
 }
+// Faster normalization than JSON.parse(JSON.stringify())
+function normalizeJSON(value: any): any {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    if (typeof value !== 'object') {
+        return value; // Primitives are copied by value
+    }
+    if (Array.isArray(value)) {
+        const newArray = [];
+        for (const item of value) {
+            if (item === undefined) newArray.push(null);
+            else newArray.push(normalizeJSON(item));
+        }
+        return newArray;
+    }
+    const newObj = {};
+    for (const key in value) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            const propValue = value[key];
+            if (propValue !== undefined) newObj[key] = normalizeJSON(propValue);
+        }
+    }
+    return newObj;
+}
 
 export let saving = $state({
     state: false
@@ -492,7 +517,7 @@ export async function saveDb(){
                 if(!forageStorage.isAccount){                    
                     // Patch-based sync for Node server                    
                     if (isNodeServer && supportsPatchSync) {
-                        const dbSnapshot = JSON.parse(JSON.stringify(db));
+                        const dbSnapshot = normalizeJSON(db);
                         const patchSuccessful = await tryPatchSave(dbSnapshot);
 
                         // If this is the first save or patch failed, fall back to full save.
@@ -679,7 +704,7 @@ export async function loadData() {
                     console.log(decoded)
                     setDatabase(decoded)
                     // Initialize compositional hash tracking
-                    lastSyncedDb = JSON.parse(JSON.stringify(decoded))
+                    lastSyncedDb = normalizeJSON(decoded)
                     lastSyncHash = compositionalHash(lastSyncedDb);
                 } catch (error) {
                     console.error(error)
