@@ -383,7 +383,12 @@ function normalizeJSON(value: any): any {
         return null;
     }
     if (typeof value !== 'object') {
-        return value; // Primitives are copied by value
+        if ((typeof value === 'number' && !isFinite(value)) || 
+            typeof value === 'function' || 
+            typeof value === 'symbol' || 
+            typeof value === 'bigint') 
+            return null;
+        return value;
     }
     if (Array.isArray(value)) {
         const newArray = [];

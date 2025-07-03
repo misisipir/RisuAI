@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": "<23.0.0"
+  },
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -12,7 +15,6 @@
     "buildsite": "vite build --outDir dist",
     "updatePlugin": "tsc public/pluginApi.ts",
     "runserver": "node server/node/server.cjs",
-    "runserver:patch": "node server/node/server.cjs --patch-sync",
     "sync": "node electron/sync",
     "electron": "node electron/dist/electron"
   },

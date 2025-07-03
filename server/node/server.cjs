@@ -9,90 +9,6 @@ const { applyPatch } = require('fast-json-patch')
 const { Packr, Unpackr, decode } = require('msgpackr')
 const fflate = require('fflate')
 
-// Compositional hash function for JSON objects in O(n)
-function compositionalHash(obj) {
-    const PRIME_MULTIPLIER = 31;
-    
-    const SEED_OBJECT = 17;
-    const SEED_ARRAY = 19;
-    const SEED_STRING = 23;
-    const SEED_NUMBER = 29;
-    const SEED_BOOLEAN = 31;
-    const SEED_NULL = 37;
-    
-    function calculateHash(node) {
-        if (node === null || node === undefined) return SEED_NULL;
-
-        switch (typeof node) {
-            case 'object':
-                if (Array.isArray(node)) {
-                    let arrayHash = SEED_ARRAY;
-                    for (const item of node)
-                        arrayHash = (Math.imul(arrayHash, PRIME_MULTIPLIER) + calculateHash(item)) >>> 0;
-                    return arrayHash;
-                } else {
-                    let objectHash = SEED_OBJECT;
-                    for (const key in node)
-                        objectHash = (objectHash ^ (Math.imul(calculateHash(key), PRIME_MULTIPLIER) + calculateHash(node[key]))) >>> 0;
-                    return objectHash;
-                }
-
-            case 'string':
-                let strHash = 2166136261;
-                for (let i = 0; i < node.length; i++)
-                    strHash = Math.imul(strHash ^ node.charCodeAt(i), 16777619);
-                return Math.imul(SEED_STRING, PRIME_MULTIPLIER) + (strHash >>> 0);
-
-            case 'number':
-                let numHash;
-                if (Number.isInteger(node) && node >= -2147483648 && node <= 2147483647) 
-                    numHash = node >>> 0; 
-                else {
-                    const str = node.toString();
-                    numHash = 2166136261;
-                    for (let i = 0; i < str.length; i++) 
-                        numHash = Math.imul(numHash ^ str.charCodeAt(i), 16777619);
-                    numHash = numHash >>> 0;
-                }
-                return Math.imul(SEED_NUMBER, PRIME_MULTIPLIER) + numHash;
-
-            case 'boolean':
-                return Math.imul(SEED_BOOLEAN, PRIME_MULTIPLIER) + (node ? 1 : 0);
-                
-            default:
-                return 0;
-        }
-    }
-    
-    const hash = calculateHash(obj);
-    return hash.toString(16); 
-}
-// Faster normalization than JSON.parse(JSON.stringify())
-function normalizeJSON(value) {
-    if (value === null || value === undefined) {
-        return null;
-    }
-    if (typeof value !== 'object') {
-        return value; // Primitives are copied by value
-    }
-    if (Array.isArray(value)) {
-        const newArray = [];
-        for (const item of value) {
-            if (item === undefined) newArray.push(null);
-            else newArray.push(normalizeJSON(item));
-        }
-        return newArray;
-    }
-    const newObj = {};
-    for (const key in value) {
-        if (Object.prototype.hasOwnProperty.call(value, key)) {
-            const propValue = value[key];
-            if (propValue !== undefined) newObj[key] = normalizeJSON(propValue);
-        }
-    }
-    return newObj;
-}
-
 app.use(express.static(path.join(process.cwd(), 'dist'), {index: false}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.raw({ type: 'application/octet-stream', limit: '50mb' }));
@@ -104,15 +20,12 @@ const hubURL = 'https://sv.risuai.xyz';
 let password = ''
 
 // Configuration flags for patch-based sync
-let enablePatchSync = process.env.RISU_PATCH_SYNC === '1' || process.argv.includes('--patch-sync')
-
-if (enablePatchSync) {
-    const [major, minor, patch] = process.version.slice(1).split('.').map(Number);
-    // v22.7.0, v23 and above have a bug with msgpackr that causes it to crash on encoding risu saves
-    if (major >= 23 || (major === 22 && minor === 7 && patch === 0)) {
-        console.log(`[Server] Detected problematic Node.js version ${process.version}. Disabling patch-based sync.`);
-        enablePatchSync = false;
-    }
+let enablePatchSync = true
+const [major, minor, patch] = process.version.slice(1).split('.').map(Number);
+// v22.7.0, v23 and above have a bug with msgpackr that causes it to crash on encoding risu saves
+if (major >= 23 || (major === 22 && minor === 7 && patch === 0)) {
+    console.log(`[Server] Detected problematic Node.js version ${process.version}. Disabling patch-based sync.`);
+    enablePatchSync = false;
 }
 
 // In-memory database cache for patch-based sync
@@ -205,6 +118,96 @@ async function encodeRisuSaveServer(data) {
     result.set(magicHeader, 0);
     result.set(encoded, magicHeader.length);
     return result;
+}
+
+// Compositional hash function for JSON objects in O(n)
+function compositionalHash(obj) {
+    const PRIME_MULTIPLIER = 31;
+    
+    const SEED_OBJECT = 17;
+    const SEED_ARRAY = 19;
+    const SEED_STRING = 23;
+    const SEED_NUMBER = 29;
+    const SEED_BOOLEAN = 31;
+    const SEED_NULL = 37;
+    
+    function calculateHash(node) {
+        if (node === null || node === undefined) return SEED_NULL;
+
+        switch (typeof node) {
+            case 'object':
+                if (Array.isArray(node)) {
+                    let arrayHash = SEED_ARRAY;
+                    for (const item of node)
+                        arrayHash = (Math.imul(arrayHash, PRIME_MULTIPLIER) + calculateHash(item)) >>> 0;
+                    return arrayHash;
+                } else {
+                    let objectHash = SEED_OBJECT;
+                    for (const key in node)
+                        objectHash = (objectHash ^ (Math.imul(calculateHash(key), PRIME_MULTIPLIER) + calculateHash(node[key]))) >>> 0;
+                    return objectHash;
+                }
+
+            case 'string':
+                let strHash = 2166136261;
+                for (let i = 0; i < node.length; i++)
+                    strHash = Math.imul(strHash ^ node.charCodeAt(i), 16777619);
+                return Math.imul(SEED_STRING, PRIME_MULTIPLIER) + (strHash >>> 0);
+
+            case 'number':
+                let numHash;
+                if (Number.isInteger(node) && node >= -2147483648 && node <= 2147483647) 
+                    numHash = node >>> 0; 
+                else {
+                    const str = node.toString();
+                    numHash = 2166136261;
+                    for (let i = 0; i < str.length; i++) 
+                        numHash = Math.imul(numHash ^ str.charCodeAt(i), 16777619);
+                    numHash = numHash >>> 0;
+                }
+                return Math.imul(SEED_NUMBER, PRIME_MULTIPLIER) + numHash;
+
+            case 'boolean':
+                return Math.imul(SEED_BOOLEAN, PRIME_MULTIPLIER) + (node ? 1 : 0);
+                
+            default:
+                return 0;
+        }
+    }
+    
+    const hash = calculateHash(obj);
+    return hash.toString(16); 
+}
+
+// Faster normalization than JSON.parse(JSON.stringify())
+function normalizeJSON(value) {
+    if (value === null || value === undefined) {
+        return null;
+    }
+    if (typeof value !== 'object') {
+        if ((typeof value === 'number' && !isFinite(value)) || 
+            typeof value === 'function' || 
+            typeof value === 'symbol' || 
+            typeof value === 'bigint') 
+            return null;
+        return value;
+    }
+    if (Array.isArray(value)) {
+        const newArray = [];
+        for (const item of value) {
+            if (item === undefined) newArray.push(null);
+            else newArray.push(normalizeJSON(item));
+        }
+        return newArray;
+    }
+    const newObj = {};
+    for (const key in value) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            const propValue = value[key];
+            if (propValue !== undefined) newObj[key] = normalizeJSON(propValue);
+        }
+    }
+    return newObj;
 }
 
 app.get('/', async (req, res, next) => {
@@ -673,6 +676,7 @@ app.post('/api/patch', async (req, res, next) => {
                     }
                 }
             } catch (error) {
+                dbCache[filePath] = {}; // trigger hash mismatch on next patch and fallback to full save
                 console.error(`[Patch] Error saving ${filePath}:`, error);
             } finally {
                 delete saveTimers[filePath];
