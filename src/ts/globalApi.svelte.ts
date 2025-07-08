@@ -44,7 +44,7 @@ import { fetch as TauriHTTPFetch } from '@tauri-apps/plugin-http';
 import { moduleUpdate } from "./process/modules";
 import type { AccountStorage } from "./storage/accountStorage";
 import { makeColdData } from "./process/coldstorage.svelte";
-import { compare } from 'fast-json-patch'
+import { SaveWorker } from './saveWorkerUtils';
 
 //@ts-ignore
 export const isTauri = !!window.__TAURI_INTERNALS__
@@ -315,99 +315,6 @@ export async function loadAsset(id:string){
     }
 }
 
-let lastSave = ''
-let lastSyncedDb: any = null
-let lastSyncHash = ''
-
-// Compositional hash function for JSON objects in O(n)
-function compositionalHash(obj: any): string {
-    const PRIME_MULTIPLIER = 31;
-    
-    const SEED_OBJECT = 17;
-    const SEED_ARRAY = 19;
-    const SEED_STRING = 23;
-    const SEED_NUMBER = 29;
-    const SEED_BOOLEAN = 31;
-    const SEED_NULL = 37;
-    
-    function calculateHash(node: any): number {
-        if (node === null || node === undefined) return SEED_NULL;
-
-        switch (typeof node) {
-            case 'object':
-                if (Array.isArray(node)) {
-                    let arrayHash = SEED_ARRAY;
-                    for (const item of node)
-                        arrayHash = (Math.imul(arrayHash, PRIME_MULTIPLIER) + calculateHash(item)) >>> 0;
-                    return arrayHash;
-                } else {
-                    let objectHash = SEED_OBJECT;
-                    for (const key in node)
-                        objectHash = (objectHash ^ (Math.imul(calculateHash(key), PRIME_MULTIPLIER) + calculateHash(node[key]))) >>> 0;
-                    return objectHash;
-                }
-
-            case 'string':
-                let strHash = 2166136261;
-                for (let i = 0; i < node.length; i++)
-                    strHash = Math.imul(strHash ^ node.charCodeAt(i), 16777619);
-                return Math.imul(SEED_STRING, PRIME_MULTIPLIER) + (strHash >>> 0);
-
-            case 'number':
-                let numHash;
-                if (Number.isInteger(node) && node >= -2147483648 && node <= 2147483647) 
-                    numHash = node >>> 0; 
-                else {
-                    const str = node.toString();
-                    numHash = 2166136261;
-                    for (let i = 0; i < str.length; i++) 
-                        numHash = Math.imul(numHash ^ str.charCodeAt(i), 16777619);
-                    numHash = numHash >>> 0;
-                }
-                return Math.imul(SEED_NUMBER, PRIME_MULTIPLIER) + numHash;
-
-            case 'boolean':
-                return Math.imul(SEED_BOOLEAN, PRIME_MULTIPLIER) + (node ? 1 : 0);
-                
-            default:
-                return 0;
-        }
-    }
-    
-    const hash = calculateHash(obj);
-    return hash.toString(16); 
-}
-// Faster normalization than JSON.parse(JSON.stringify())
-function normalizeJSON(value: any): any {
-    if (value === null || value === undefined) {
-        return null;
-    }
-    if (typeof value !== 'object') {
-        if ((typeof value === 'number' && !isFinite(value)) || 
-            typeof value === 'function' || 
-            typeof value === 'symbol' || 
-            typeof value === 'bigint') 
-            return null;
-        return value;
-    }
-    if (Array.isArray(value)) {
-        const newArray = [];
-        for (const item of value) {
-            if (item === undefined) newArray.push(null);
-            else newArray.push(normalizeJSON(item));
-        }
-        return newArray;
-    }
-    const newObj = {};
-    for (const key in value) {
-        if (Object.prototype.hasOwnProperty.call(value, key)) {
-            const propValue = value[key];
-            if (propValue !== undefined) newObj[key] = normalizeJSON(propValue);
-        }
-    }
-    return newObj;
-}
-
 export let saving = $state({
     state: false
 })
@@ -416,21 +323,20 @@ export let saving = $state({
  * Attempts to save database changes using patch synchronization.
  * @returns {Promise<boolean>} Returns true if patch was successfully applied or no changes exist, false if full save is required.
  */
-async function tryPatchSave(db: any): Promise<boolean> {
-    // Initial save cannot use patch, so return false to trigger full save.
-    if (lastSyncedDb === null) {
-        return false;
-    }
-
+async function tryPatchSave(dbSnapshot: string): Promise<boolean> {
     try {
-        const patch = compare(lastSyncedDb, db);
-        if (patch.length > 0) {
+        const patchResult = await saveWorker.processForPatch(dbSnapshot);
+        
+        if (patchResult.needsFullSave) false;
+        
+        if (patchResult.patch.length > 0) {
             const success = await forageStorage.patchItem('database/database.bin', {
-                patch: patch,
-                expectedHash: lastSyncHash
+                patch: patchResult.patch,
+                expectedHash: patchResult.expectedHash
             });
             return success;
         }
+        
         return true; // No changes detected, treat as success
     } catch (error) {
         return false; // Fall back to full save on error
@@ -469,7 +375,6 @@ export async function saveDb(){
     $effect.root(() => {
 
         let selIdState = $state(0)
-        let oldSaveHash = ''
 
         selectedCharID.subscribe((v) => {
             selIdState = v
@@ -513,8 +418,9 @@ export async function saveDb(){
                 await sleep(1000)
                 continue
             }
+            let dbSnapshot = JSON.stringify(db)
             if(isTauri){
-                const dbData = encodeRisuSaveLegacy(db)
+                const dbData = await saveWorker.encodeLegacy(dbSnapshot);
                 await writeFile('database/database.bin', dbData, {baseDir: BaseDirectory.AppData});
                 await writeFile(`database/dbbackup-${(Date.now()/100).toFixed()}.bin`, dbData, {baseDir: BaseDirectory.AppData});
             }
@@ -522,28 +428,23 @@ export async function saveDb(){
                 if(!forageStorage.isAccount){                    
                     // Patch-based sync for Node server                    
                     if (isNodeServer && supportsPatchSync) {
-                        const dbSnapshot = normalizeJSON(db);
                         const patchSuccessful = await tryPatchSave(dbSnapshot);
 
                         // If this is the first save or patch failed, fall back to full save.
                         if (!patchSuccessful) {
-                            const dbData = encodeRisuSaveLegacy(dbSnapshot);
+                            const dbData = await saveWorker.encodeLegacy(dbSnapshot);
                             await forageStorage.setItem('database/database.bin', dbData);
                             await forageStorage.setItem(`database/dbbackup-${(Date.now()/100).toFixed()}.bin`, dbData);
                         }
-
-                        // Update last synced database and hash using compositional hash
-                        lastSyncedDb = dbSnapshot;
-                        lastSyncHash = compositionalHash(dbSnapshot);
                     } else {
                         // Standard save method for environments that don't support patches 
-                        const dbData = encodeRisuSaveLegacy(db);
+                        const dbData = await saveWorker.encodeLegacy(dbSnapshot);
                         await forageStorage.setItem('database/database.bin', dbData);
                         await forageStorage.setItem(`database/dbbackup-${(Date.now()/100).toFixed()}.bin`, dbData);
                     }
                 }
                 if(forageStorage.isAccount){
-                    const dbData = await encodeRisuSave(db)
+                    const dbData = await saveWorker.encode(dbSnapshot)
                     
                     if(lastDbData.length === dbData.length){
                         let same = true
@@ -639,8 +540,9 @@ let usingSw = false
  * Loads the application data.
  * 
  * @returns {Promise<void>} - A promise that resolves when the data has been loaded.
- */
+*/
 export async function loadData() {
+    saveWorker = new SaveWorker()
     const loaded = get(loadedStore)
     if(!loaded){
         try {
@@ -677,7 +579,7 @@ export async function loadData() {
                                 LoadingStatusState.text = `Reading Backup File ${backup}...`
                                 const backupData = await readFile(`database/dbbackup-${backup}.bin`, {baseDir: BaseDirectory.AppData})
                                 setDatabase(
-                                  await decodeRisuSave(backupData)
+                                    await decodeRisuSave(backupData)
                                 )
                                 backupLoaded = true
                             } catch (error) {
@@ -708,9 +610,7 @@ export async function loadData() {
                     const decoded = await decodeRisuSave(gotStorage)
                     console.log(decoded)
                     setDatabase(decoded)
-                    // Initialize compositional hash tracking
-                    lastSyncedDb = normalizeJSON(decoded)
-                    lastSyncHash = compositionalHash(lastSyncedDb);
+                    await saveWorker.initialize(JSON.stringify(decoded));
                 } catch (error) {
                     console.error(error)
                     const backups = await getDbBackups()
@@ -2474,3 +2374,6 @@ export function getLanguageCodes(){
 
     return languageCodes
 }
+
+// Worker instance for save operations
+let saveWorker: SaveWorker | null = null;

@@ -179,37 +179,6 @@ function compositionalHash(obj) {
     return hash.toString(16); 
 }
 
-// Faster normalization than JSON.parse(JSON.stringify())
-function normalizeJSON(value) {
-    if (value === null || value === undefined) {
-        return null;
-    }
-    if (typeof value !== 'object') {
-        if ((typeof value === 'number' && !isFinite(value)) || 
-            typeof value === 'function' || 
-            typeof value === 'symbol' || 
-            typeof value === 'bigint') 
-            return null;
-        return value;
-    }
-    if (Array.isArray(value)) {
-        const newArray = [];
-        for (const item of value) {
-            if (item === undefined) newArray.push(null);
-            else newArray.push(normalizeJSON(item));
-        }
-        return newArray;
-    }
-    const newObj = {};
-    for (const key in value) {
-        if (Object.prototype.hasOwnProperty.call(value, key)) {
-            const propValue = value[key];
-            if (propValue !== undefined) newObj[key] = normalizeJSON(propValue);
-        }
-    }
-    return newObj;
-}
-
 app.get('/', async (req, res, next) => {
 
     const clientIP = req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown IP';
@@ -631,7 +600,7 @@ app.post('/api/patch', async (req, res, next) => {
             const fullPath = path.join(savePath, filePath);
             if (existsSync(fullPath)) {
                 const fileContent = await fs.readFile(fullPath);
-                dbCache[filePath] = normalizeJSON(await decodeRisuSaveServer(fileContent));
+                dbCache[filePath] = JSON.parse(JSON.stringify(await decodeRisuSaveServer(fileContent)));
             } 
             else {
                 dbCache[filePath] = {};
