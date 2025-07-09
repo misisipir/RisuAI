@@ -12,6 +12,11 @@ interface PatchResult {
     needsFullSave: boolean;
 }
 
+interface AccountSaveResult {
+    shouldSave: boolean;
+    dbData: Uint8Array;
+}
+
 export class SaveWorker {
     private worker: Worker;
     private pendingPromises: Map<string, { resolve: Function, reject: Function }> = new Map();
@@ -46,7 +51,7 @@ export class SaveWorker {
         this.pendingPromises.clear();
     }
 
-    private postMessage(type: string, data?: string): Promise<any> {
+    private postMessage(type: string, data?: any): Promise<any> {
         const id = (this.messageId++).toString();
         
         return new Promise((resolve, reject) => {
@@ -55,58 +60,26 @@ export class SaveWorker {
         });
     }
 
-    /**
-     * Initializes the worker with a baseline database state for patch comparison.
-     */
-    async init(db: string): Promise<void> {
+    async init(db: any): Promise<void> {
         await this.postMessage('init', db);
     }
 
-    /**
-     * Signals the worker to start receiving a new database.
-     */
-    async load(): Promise<void> {
-        await this.postMessage('load');
+    async write(db: any): Promise<void> {
+        await this.postMessage('write', db);
     }
 
-    /**
-     * Sends a chunk of the database string to the worker.
-     */
-    async write(chunk: string): Promise<void> {
-        await this.postMessage('write', chunk);
-    }
-
-    /**
-     * Signals the worker that all chunks have been sent and the database can be parsed and stored.
-     */
-    async commit(): Promise<void> {
-        await this.postMessage('commit');
-    }
-
-    /**
-     * Commands the worker to create a patch from the last committed database.
-     */
     async getPatch(): Promise<PatchResult> {
         return await this.postMessage('getPatch');
     }
 
-    /**
-     * Commands the worker to encode the last committed database using the legacy format.
-     */
     async encodeLegacy(): Promise<Uint8Array> {
         return await this.postMessage('encodeLegacy');
     }
 
-    /**
-     * Commands the worker to encode the last committed database using the modern format.
-     */
-    async encode(): Promise<Uint8Array> {
-        return await this.postMessage('encode');
+    async accountSave(): Promise<AccountSaveResult> {
+        return await this.postMessage('accountSave');
     }
 
-    /**
-     * Terminates the worker.
-     */
     terminate(): void {
         this.worker.terminate();
         this.pendingPromises.forEach(({ reject }) => {

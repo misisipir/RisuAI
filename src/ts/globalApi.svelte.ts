@@ -319,7 +319,44 @@ export let saving = $state({
     state: false
 })
 const saveWorker = new SaveWorker()
-
+// Exact equivalent of JSON.parse(JSON.stringify()) but faster
+function normalizeJSON(value: any): any {
+    if (value === null || value === undefined) return null;
+    if (typeof value !== 'object') {
+        if (typeof value === 'number' && !isFinite(value)) return null;
+        if (typeof value === 'function' || 
+            typeof value === 'symbol' || 
+            typeof value === 'bigint') 
+            return undefined; 
+        return value;
+    }
+    if (value instanceof Date) return value.toISOString();
+    if (value instanceof RegExp || value instanceof Error) return {};
+    if (Array.isArray(value)) {
+        const result = [];
+        for (const item of value) {
+            if (item === undefined) {
+                result.push(null);
+            } else {
+                const normalized = normalizeJSON(item);
+                result.push(normalized === undefined ? null : normalized);
+            }
+        }
+        return result;
+    }
+    const result = {};
+    for (const key in value) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            const propValue = value[key];
+            if (propValue !== undefined) {
+                const normalized = normalizeJSON(propValue);
+                if (normalized !== undefined) 
+                    result[key] = normalized;
+            }
+        }
+    }
+    return result;
+}
 /**
  * Saves the current state of the database.
  * 
@@ -370,7 +407,6 @@ export async function saveDb(){
     })
 
     let savetrys = 0
-    let lastDbData = new Uint8Array(0)
     await sleep(1000)
     while(true){
         if(!changed){
@@ -395,28 +431,20 @@ export async function saveDb(){
                 await sleep(1000)
                 continue
             }
+            // PHASE 1: Send the normalized data to the save worker for processing
+            //          To avoid UI freezing, normalize the data in chunks
             const { characters, ...liteDb } = db;
-            // PHASE 1: Stream database to worker
-            await saveWorker.load();
-
-            await saveWorker.write('{"characters":[');
+            const newDb = normalizeJSON(liteDb);
+            newDb.characters = []
             for (let i = 0; i < characters.length; i++) {
+                await sleep(0); 
                 const char = characters[i];
-                const chunk = JSON.stringify(char);
-                await saveWorker.write(chunk);
-                if (i < characters.length - 1) {
-                    await saveWorker.write(',');
-                }
-                await sleep(1); // Yield after each character
+                const chunk = normalizeJSON(char);
+                newDb.characters.push(chunk);
             }
-            await saveWorker.write('],');
+            await saveWorker.write(newDb)
 
-            await saveWorker.write(JSON.stringify(liteDb).slice(1, -1));
-            await saveWorker.write('}');
-
-            await saveWorker.commit();
-
-            // PHASE 2: Command worker to process the committed data
+            // PHASE 2: Command the worker to process the data
             if(isTauri){
                 const dbData = await saveWorker.encodeLegacy();
                 await writeFile('database/database.bin', dbData, {baseDir: BaseDirectory.AppData});
@@ -441,30 +469,13 @@ export async function saveDb(){
                     } 
                 }
                 if(forageStorage.isAccount){
-                    const dbData = await saveWorker.encode()
-                    
-                    if(lastDbData.length === dbData.length){
-                        let same = true
-                        for(let i = 20; i < dbData.length; i++){
-                            if(dbData[i] !== lastDbData[i]){
-                                same = false
-                                break
-                            }
-                        }   
-
-                        if(same){
-                            await sleep(500)
-                            continue
-                        }
+                    const accountResult = await saveWorker.accountSave();
+                    if (!accountResult.shouldSave) {
+                        await sleep(500);
+                        continue;
                     }
-
-                    lastDbData = dbData
-                    const z:Database = await decodeRisuSave(dbData)
-                    if(z.formatversion){
-                        await forageStorage.setItem('database/database.bin', dbData)
-                    }
-
-                    await sleep(3000)
+                    await forageStorage.setItem('database/database.bin', accountResult.dbData);
+                    await sleep(3000);
                 }
             }
             if(!forageStorage.isAccount){
@@ -704,7 +715,7 @@ export async function loadData() {
             await checkNewFormat()
             const db = getDatabase();
 
-            await saveWorker.init(JSON.stringify(db));
+            await saveWorker.init(normalizeJSON(db));
             
             LoadingStatusState.text = "Updating States..."
             updateColorScheme()
