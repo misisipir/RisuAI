@@ -171,12 +171,22 @@ async function hubProxyFunc(req, res) {
         delete headersToSend.host;
         delete headersToSend.connection;
         
+        if (pathAndQuery.startsWith('/hub/')) {
+            headersToSend.origin = hubURL;
+            headersToSend.referer = hubURL + '/';
+            delete headersToSend['sec-fetch-site'];
+            delete headersToSend['sec-fetch-mode'];
+            delete headersToSend['sec-fetch-dest'];
+            delete headersToSend['sec-ch-ua'];
+            delete headersToSend['sec-ch-ua-mobile'];
+            delete headersToSend['sec-ch-ua-platform'];
+        }
+        
         const response = await fetch(externalURL, {
             method: req.method,
             headers: headersToSend,
-            body: req.method !== 'GET' && req.method !== 'HEAD' ? req : undefined,
-            redirect: 'manual',
-            duplex: 'half'
+            body: req.method !== 'GET' && req.method !== 'HEAD' ? JSON.stringify(req.body) : undefined,
+            redirect: 'manual'
         });
         
         for (const [key, value] of response.headers.entries()) {
