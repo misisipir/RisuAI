@@ -10,9 +10,19 @@ import { convertImage } from "../parser.svelte"
 import { Capacitor } from "@capacitor/core"
 import { HideIconStore, moduleBackgroundEmbedding, ReloadGUIPointer } from "../stores.svelte"
 import {get} from "svelte/store"
+import type {MCPTool} from "./mcp/mcplib";
 
 export interface MCPModule{
     url: string
+    version?: string
+    tools?:(MCPTool & {
+        functionName: string
+        code: string
+        inputSchemaString: string
+    })[]
+    disabledTools: {
+        [key: string]: boolean
+    }
 }
 
 export interface RisuModule{
@@ -393,7 +403,7 @@ export function getModuleToggles() {
 export function getModuleMcps() {
     const modules = getModules()
 
-    return modules.map((v) => v.mcp?.url).filter((v) => v)
+    return modules.filter((v) => v?.mcp?.url)
 }
 
 export async function applyModule() {

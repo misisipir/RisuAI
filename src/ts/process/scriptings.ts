@@ -56,6 +56,7 @@ export async function runScripted(code:string, arg:{
     lowLevelAccess?: boolean,
     meta?: object,
     mode?: string,
+    args?: any[],
     type?: 'lua'|'py'
 }){
     const type: 'lua'|'py' = arg.type ?? 'lua'
@@ -65,6 +66,7 @@ export async function runScripted(code:string, arg:{
     const getVar = arg.getVar ?? getChatVar
     const meta = arg.meta ?? {}
     const mode = arg.mode ?? 'manual'
+    const args = arg.args ?? []
 
     let chat = arg.chat ?? getCurrentChat()
     let stopSending = false
@@ -866,7 +868,7 @@ export async function runScripted(code:string, arg:{
                     default:{
                         const func = luaEngine.global.get(mode)
                         if(func){
-                            res = await func(accessKey)
+                            res = await func(accessKey, ...args)
                         }
                         break
                     }
