@@ -686,6 +686,9 @@ export async function loadData() {
                     characterURLImport()
                 }
             }
+            
+            await saveWorker.init(normalizeJSON(getDatabase()));
+
             LoadingStatusState.text = "Checking Unnecessary Files..."
             try {
                 await pargeChunks()
@@ -714,8 +717,6 @@ export async function loadData() {
             LoadingStatusState.text = "Checking For Format Update..."
             await checkNewFormat()
             const db = getDatabase();
-
-            await saveWorker.init(normalizeJSON(db));
             
             LoadingStatusState.text = "Updating States..."
             updateColorScheme()
