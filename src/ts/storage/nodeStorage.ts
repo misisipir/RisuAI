@@ -92,10 +92,6 @@ export class NodeStorage{
             }
         })
         
-        if(da.status === 409) {
-            throw new Error('Hash mismatch')
-        }
-        
         if(da.status < 200 || da.status >= 300){
             return false
         }

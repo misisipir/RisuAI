@@ -1,4 +1,3 @@
-// Web Worker for database save operations
 import { compare } from 'fast-json-patch';
 import { Packr } from "msgpackr";
 import * as fflate from "fflate";
@@ -6,6 +5,8 @@ import * as fflate from "fflate";
 // Worker state
 let lastSyncedDb: any = null;
 let lastSyncHash = '';
+let currentDb: any = null;
+let progressiveString = '';
 
 // Initialize packr
 const packr = new Packr({
@@ -59,7 +60,7 @@ async function encodeRisuSave(data: any) {
     return result;
 }
 
-// Copied functions from globalApi.svelte.ts
+// Compositional hash function for JSON objects in O(n)
 function compositionalHash(obj: any): string {
     const PRIME_MULTIPLIER = 31;
     
@@ -83,8 +84,8 @@ function compositionalHash(obj: any): string {
                 } else {
                     let objectHash = SEED_OBJECT;
                     for (const key in node)
-                        objectHash = (objectHash ^ (Math.imul(calculateHash(key), PRIME_MULTIPLIER) + calculateHash(node[key]))) >>> 0;
-                    return objectHash;
+                        objectHash += (Math.imul(calculateHash(key), PRIME_MULTIPLIER) + calculateHash(node[key]));
+                    return objectHash >>> 0;
                 }
 
             case 'string':
@@ -123,76 +124,65 @@ self.onmessage = async function(e) {
     const { type, data, id } = e.data;
     
     try {
-        // Parse the stringified data first
-        const parsedData = data ? JSON.parse(data) : null;
-        
         switch (type) {
-            case 'initialize':
-                // Initialize lastSyncedDb from loadData
-                if (parsedData) {
-                    lastSyncedDb = parsedData;
+            case 'init':
+                const parsedInitData = JSON.parse(data);
+                if (parsedInitData) {
+                    lastSyncedDb = parsedInitData;
                     lastSyncHash = compositionalHash(lastSyncedDb);
                 }
                 postMessage({ type: 'initialized', id });
                 break;
 
-            case 'processForPatch':
-                // Process database for patch-based save
-                if (!parsedData) {
-                    throw new Error('Database not provided');
-                }
-                const dbSnapshot = parsedData;
+            case 'load':
+                progressiveString = '';
+                postMessage({ type: 'loaded', id });
+                break;
+
+            case 'write':
+                progressiveString += data;
+                postMessage({ type: 'written', id });
+                break;
+
+            case 'commit':
+                currentDb = JSON.parse(progressiveString);
+                progressiveString = ''; // Reset for next use
+                postMessage({ type: 'committed', id });
+                break;
+
+            case 'getPatch':
+                if (!currentDb) throw new Error('Database not loaded before getPatch call');
                 let patch = [];
                 let needsFullSave = false;
                 
                 if (lastSyncedDb === null) {
                     needsFullSave = true;
                 } else {
-                    patch = compare(lastSyncedDb, dbSnapshot);
+                    patch = compare(lastSyncedDb, currentDb);
                 }
 
-                // Create a serializable response
                 const response = {
-                    patch: JSON.parse(JSON.stringify(patch)), // Ensure patch is serializable
+                    patch: JSON.parse(JSON.stringify(patch)),
                     expectedHash: lastSyncHash,
                     needsFullSave
                 };
                 
-                // Update worker state
-                lastSyncedDb = dbSnapshot;
-                lastSyncHash = compositionalHash(dbSnapshot);
+                lastSyncedDb = currentDb;
+                lastSyncHash = compositionalHash(currentDb);
                 
-                postMessage({ 
-                    type: 'patchProcessed', 
-                    id,
-                    data: response
-                });
+                postMessage({ type: 'patchProcessed', id, data: response });
                 break;
 
             case 'encodeLegacy':
-                // Encode database using legacy format
-                if (!parsedData) {
-                    throw new Error('Database not provided');
-                }
-                const encodedLegacy = encodeRisuSaveLegacy(parsedData);
-                postMessage({ 
-                    type: 'encodedLegacy', 
-                    id,
-                    data: encodedLegacy
-                });
+                if (!currentDb) throw new Error('Database not loaded before encodeLegacy call');
+                const encodedLegacy = encodeRisuSaveLegacy(currentDb);
+                postMessage({ type: 'encodedLegacy', id, data: encodedLegacy });
                 break;
 
             case 'encode':
-                // Encode database using regular format
-                if (!parsedData) {
-                    throw new Error('Database not provided');
-                }
-                const encoded = await encodeRisuSave(parsedData);
-                postMessage({ 
-                    type: 'encoded', 
-                    id,
-                    data: encoded
-                });
+                if (!currentDb) throw new Error('Database not loaded before encode call');
+                const encoded = await encodeRisuSave(currentDb);
+                postMessage({ type: 'encoded', id, data: encoded });
                 break;
 
             default:

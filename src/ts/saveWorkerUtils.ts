@@ -2,7 +2,7 @@
 interface WorkerMessage {
     type: string;
     id: string;
-    data?: string;
+    data?: any;
     error?: string;
 }
 
@@ -18,7 +18,7 @@ export class SaveWorker {
     private messageId: number = 0;
 
     constructor() {
-        this.worker = new Worker(new URL('./saveWorker.ts', import.meta.url));
+        this.worker = new Worker(new URL('./saveWorker.ts', import.meta.url), { type: 'module' });
         this.worker.onmessage = this.handleMessage.bind(this);
         this.worker.onerror = this.handleError.bind(this);
     }
@@ -40,7 +40,6 @@ export class SaveWorker {
 
     private handleError(error: ErrorEvent) {
         console.error('Save worker error:', error);
-        // Reject all pending promises
         this.pendingPromises.forEach(({ reject }) => {
             reject(new Error('Worker error: ' + error.message));
         });
@@ -57,35 +56,56 @@ export class SaveWorker {
     }
 
     /**
-     * Initialize the worker with database for patch tracking
+     * Initializes the worker with a baseline database state for patch comparison.
      */
-    async initialize(db: string): Promise<void> {
-        await this.postMessage('initialize', db);
+    async init(db: string): Promise<void> {
+        await this.postMessage('init', db);
     }
 
     /**
-     * Process database for patch-based save
+     * Signals the worker to start receiving a new database.
      */
-    async processForPatch(db: string): Promise<PatchResult> {
-        return await this.postMessage('processForPatch', db);
+    async load(): Promise<void> {
+        await this.postMessage('load');
     }
 
     /**
-     * Encode database using legacy format
+     * Sends a chunk of the database string to the worker.
      */
-    async encodeLegacy(db: string): Promise<Uint8Array> {
-        return await this.postMessage('encodeLegacy', db);
+    async write(chunk: string): Promise<void> {
+        await this.postMessage('write', chunk);
     }
 
     /**
-     * Encode database using regular format
+     * Signals the worker that all chunks have been sent and the database can be parsed and stored.
      */
-    async encode(db: string): Promise<Uint8Array> {
-        return await this.postMessage('encode', db);
+    async commit(): Promise<void> {
+        await this.postMessage('commit');
     }
 
     /**
-     * Terminate the worker
+     * Commands the worker to create a patch from the last committed database.
+     */
+    async getPatch(): Promise<PatchResult> {
+        return await this.postMessage('getPatch');
+    }
+
+    /**
+     * Commands the worker to encode the last committed database using the legacy format.
+     */
+    async encodeLegacy(): Promise<Uint8Array> {
+        return await this.postMessage('encodeLegacy');
+    }
+
+    /**
+     * Commands the worker to encode the last committed database using the modern format.
+     */
+    async encode(): Promise<Uint8Array> {
+        return await this.postMessage('encode');
+    }
+
+    /**
+     * Terminates the worker.
      */
     terminate(): void {
         this.worker.terminate();

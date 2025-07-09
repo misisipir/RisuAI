@@ -318,30 +318,7 @@ export async function loadAsset(id:string){
 export let saving = $state({
     state: false
 })
-
-/**
- * Attempts to save database changes using patch synchronization.
- * @returns {Promise<boolean>} Returns true if patch was successfully applied or no changes exist, false if full save is required.
- */
-async function tryPatchSave(dbSnapshot: string): Promise<boolean> {
-    try {
-        const patchResult = await saveWorker.processForPatch(dbSnapshot);
-        
-        if (patchResult.needsFullSave) false;
-        
-        if (patchResult.patch.length > 0) {
-            const success = await forageStorage.patchItem('database/database.bin', {
-                patch: patchResult.patch,
-                expectedHash: patchResult.expectedHash
-            });
-            return success;
-        }
-        
-        return true; // No changes detected, treat as success
-    } catch (error) {
-        return false; // Fall back to full save on error
-    }
-}
+const saveWorker = new SaveWorker()
 
 /**
  * Saves the current state of the database.
@@ -418,33 +395,53 @@ export async function saveDb(){
                 await sleep(1000)
                 continue
             }
-            let dbSnapshot = JSON.stringify(db)
+            const { characters, ...liteDb } = db;
+            // PHASE 1: Stream database to worker
+            await saveWorker.load();
+
+            await saveWorker.write('{"characters":[');
+            for (let i = 0; i < characters.length; i++) {
+                const char = characters[i];
+                const chunk = JSON.stringify(char);
+                await saveWorker.write(chunk);
+                if (i < characters.length - 1) {
+                    await saveWorker.write(',');
+                }
+                await sleep(1); // Yield after each character
+            }
+            await saveWorker.write('],');
+
+            await saveWorker.write(JSON.stringify(liteDb).slice(1, -1));
+            await saveWorker.write('}');
+
+            await saveWorker.commit();
+
+            // PHASE 2: Command worker to process the committed data
             if(isTauri){
-                const dbData = await saveWorker.encodeLegacy(dbSnapshot);
+                const dbData = await saveWorker.encodeLegacy();
                 await writeFile('database/database.bin', dbData, {baseDir: BaseDirectory.AppData});
                 await writeFile(`database/dbbackup-${(Date.now()/100).toFixed()}.bin`, dbData, {baseDir: BaseDirectory.AppData});
             }
             else{                
-                if(!forageStorage.isAccount){                    
-                    // Patch-based sync for Node server                    
-                    if (isNodeServer && supportsPatchSync) {
-                        const patchSuccessful = await tryPatchSave(dbSnapshot);
-
-                        // If this is the first save or patch failed, fall back to full save.
-                        if (!patchSuccessful) {
-                            const dbData = await saveWorker.encodeLegacy(dbSnapshot);
-                            await forageStorage.setItem('database/database.bin', dbData);
-                            await forageStorage.setItem(`database/dbbackup-${(Date.now()/100).toFixed()}.bin`, dbData);
+                if(!forageStorage.isAccount){      
+                    let saved = false;              
+                    if (supportsPatchSync) {
+                        const patchResult = await saveWorker.getPatch();
+                        if (!patchResult.needsFullSave) {
+                            saved = await forageStorage.patchItem('database/database.bin', {
+                                patch: patchResult.patch,
+                                expectedHash: patchResult.expectedHash
+                            });
                         }
-                    } else {
-                        // Standard save method for environments that don't support patches 
-                        const dbData = await saveWorker.encodeLegacy(dbSnapshot);
+                    }
+                    if (!saved) {
+                        const dbData = await saveWorker.encodeLegacy();
                         await forageStorage.setItem('database/database.bin', dbData);
                         await forageStorage.setItem(`database/dbbackup-${(Date.now()/100).toFixed()}.bin`, dbData);
-                    }
+                    } 
                 }
                 if(forageStorage.isAccount){
-                    const dbData = await saveWorker.encode(dbSnapshot)
+                    const dbData = await saveWorker.encode()
                     
                     if(lastDbData.length === dbData.length){
                         let same = true
@@ -542,7 +539,6 @@ let usingSw = false
  * @returns {Promise<void>} - A promise that resolves when the data has been loaded.
 */
 export async function loadData() {
-    saveWorker = new SaveWorker()
     const loaded = get(loadedStore)
     if(!loaded){
         try {
@@ -610,7 +606,6 @@ export async function loadData() {
                     const decoded = await decodeRisuSave(gotStorage)
                     console.log(decoded)
                     setDatabase(decoded)
-                    await saveWorker.initialize(JSON.stringify(decoded));
                 } catch (error) {
                     console.error(error)
                     const backups = await getDbBackups()
@@ -709,6 +704,8 @@ export async function loadData() {
             await checkNewFormat()
             const db = getDatabase();
 
+            await saveWorker.init(JSON.stringify(db));
+            
             LoadingStatusState.text = "Updating States..."
             updateColorScheme()
             updateTextThemeAndCSS()
@@ -2374,6 +2371,3 @@ export function getLanguageCodes(){
 
     return languageCodes
 }
-
-// Worker instance for save operations
-let saveWorker: SaveWorker | null = null;

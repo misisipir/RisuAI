@@ -144,8 +144,8 @@ function compositionalHash(obj) {
                 } else {
                     let objectHash = SEED_OBJECT;
                     for (const key in node)
-                        objectHash = (objectHash ^ (Math.imul(calculateHash(key), PRIME_MULTIPLIER) + calculateHash(node[key]))) >>> 0;
-                    return objectHash;
+                        objectHash += (Math.imul(calculateHash(key), PRIME_MULTIPLIER) + calculateHash(node[key]));
+                    return objectHash >>> 0;
                 }
 
             case 'string':
