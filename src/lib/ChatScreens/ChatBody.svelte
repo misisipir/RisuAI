@@ -165,29 +165,14 @@
         const imgs = bodyRoot?.querySelectorAll('img:not([src^="data:"]):not([src^="http:"]):not([src^="https:"]):not([src^="blob:"]):not([src^="file:"]):not([src^="tauri:"]):not([noimage])') as NodeListOf<HTMLImageElement>
         if (imgs && imgs.length > 0) {
             imgs.forEach(async (img) => {
-                const name = img.getAttribute('src')?.toLocaleLowerCase() || ''
-
-                console.log(name)
-                if(
-                    name.length > 200 ||
-                    name.includes(':')
-                ){
-                    img.setAttribute('noimage', 'true')
-                    return
-                }
-                
                 const assets = getModuleAssets().concat(getCurrentCharacter().additionalAssets ?? [])
-                const styl = getCurrentCharacter().prebuiltAssetStyle
-                console.log('Checking image:', name, 'Assets:', assets)
-                const foundAsset = assets.find(asset => asset[0].toLocaleLowerCase() === name)
+                const foundAsset = assets.find(asset => asset[0] === img.src)
                 if(foundAsset){
-                    img.classList.add('root-loaded-image')
-                    img.classList.add('root-loaded-image-' + styl)
                     img.src = await getFileSrc(foundAsset[1])
                     return
                 }
 
-                if(name.length < 3){
+                if(img.src.length < 3){
                     img.setAttribute('noimage', 'true')
                     return
                 }
@@ -201,8 +186,9 @@
                     }
                 })
 
-                const prefixLoc = name.lastIndexOf('.')
-                const prefix = prefixLoc > 0 ? name.substring(0, prefixLoc) : ''
+                const name = img.src.toLocaleLowerCase()
+                const prefixLoc = img.src.lastIndexOf('.')
+                const prefix = prefixLoc > 0 ? img.src.substring(0, prefixLoc) : ''
                 let currentDistance = 1000
                 let currentFound = ''
                 for(const asset of dista){
@@ -216,15 +202,9 @@
                     }
                 }
                 if(currentFound){
-                    const got = await getFileSrc(currentFound)
-                    const name2 = img.getAttribute('src')?.toLocaleLowerCase() || ''
-                    if(name === name2){
-                        img.setAttribute('src', got)
-                    }
-
+                    img.src = await getFileSrc(currentFound)
                     if(img.classList.length === 0){
-                        img.classList.add('root-loaded-image')
-                        img.classList.add('root-loaded-image-' + styl)
+                    img.classList.add('root-loaded-image')
                     }
                     img.removeAttribute('noimage')
                 }

@@ -44,11 +44,14 @@ import { fetch as TauriHTTPFetch } from '@tauri-apps/plugin-http';
 import { moduleUpdate } from "./process/modules";
 import type { AccountStorage } from "./storage/accountStorage";
 import { makeColdData } from "./process/coldstorage.svelte";
+import { SaveWorker } from './saveWorkerUtils';
 
 //@ts-ignore
 export const isTauri = !!window.__TAURI_INTERNALS__
 //@ts-ignore
 export const isNodeServer = !!globalThis.__NODE__
+//@ts-ignore
+export const supportsPatchSync = !!globalThis.__PATCH_SYNC__
 export const forageStorage = new AutoStorage()
 export const googleBuild = false
 export const isMobile = navigator.userAgent.match(/(iPad)|(iPhone)|(iPod)|(android)|(webOS)/i)
@@ -312,11 +315,48 @@ export async function loadAsset(id:string){
     }
 }
 
-let lastSave = ''
 export let saving = $state({
     state: false
 })
-
+const saveWorker = new SaveWorker()
+// Exact equivalent of JSON.parse(JSON.stringify()) but faster
+function normalizeJSON(value: any): any {
+    if (value === null || value === undefined) return null;
+    if (typeof value !== 'object') {
+        if (typeof value === 'number' && !isFinite(value)) return null;
+        if (typeof value === 'function' || 
+            typeof value === 'symbol' || 
+            typeof value === 'bigint') 
+            return undefined; 
+        return value;
+    }
+    if (value instanceof Date) return value.toISOString();
+    if (value instanceof RegExp || value instanceof Error) return {};
+    if (Array.isArray(value)) {
+        const result = [];
+        for (const item of value) {
+            if (item === undefined) {
+                result.push(null);
+            } else {
+                const normalized = normalizeJSON(item);
+                result.push(normalized === undefined ? null : normalized);
+            }
+        }
+        return result;
+    }
+    const result = {};
+    for (const key in value) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            const propValue = value[key];
+            if (propValue !== undefined) {
+                const normalized = normalizeJSON(propValue);
+                if (normalized !== undefined) 
+                    result[key] = normalized;
+            }
+        }
+    }
+    return result;
+}
 /**
  * Saves the current state of the database.
  * 
@@ -349,7 +389,6 @@ export async function saveDb(){
     $effect.root(() => {
 
         let selIdState = $state(0)
-        let oldSaveHash = ''
 
         selectedCharID.subscribe((v) => {
             selIdState = v
@@ -368,7 +407,6 @@ export async function saveDb(){
     })
 
     let savetrys = 0
-    let lastDbData = new Uint8Array(0)
     await sleep(1000)
     while(true){
         if(!changed){
@@ -393,42 +431,51 @@ export async function saveDb(){
                 await sleep(1000)
                 continue
             }
+            // PHASE 1: Send the normalized data to the save worker for processing
+            //          To avoid UI freezing, normalize the data in chunks
+            const { characters, ...liteDb } = db;
+            const newDb = normalizeJSON(liteDb);
+            newDb.characters = []
+            for (let i = 0; i < characters.length; i++) {
+                await sleep(0); 
+                const char = characters[i];
+                const chunk = normalizeJSON(char);
+                newDb.characters.push(chunk);
+            }
+            await saveWorker.write(newDb)
+
+            // PHASE 2: Command the worker to process the data
             if(isTauri){
-                const dbData = encodeRisuSaveLegacy(db)
+                const dbData = await saveWorker.encodeLegacy();
                 await writeFile('database/database.bin', dbData, {baseDir: BaseDirectory.AppData});
                 await writeFile(`database/dbbackup-${(Date.now()/100).toFixed()}.bin`, dbData, {baseDir: BaseDirectory.AppData});
             }
-            else{
-                if(!forageStorage.isAccount){
-                    const dbData = encodeRisuSaveLegacy(db)
-                    await forageStorage.setItem('database/database.bin', dbData)
-                    await forageStorage.setItem(`database/dbbackup-${(Date.now()/100).toFixed()}.bin`, dbData)
-                }
-                if(forageStorage.isAccount){
-                    const dbData = await encodeRisuSave(db)
-                    
-                    if(lastDbData.length === dbData.length){
-                        let same = true
-                        for(let i = 20; i < dbData.length; i++){
-                            if(dbData[i] !== lastDbData[i]){
-                                same = false
-                                break
-                            }
-                        }   
-
-                        if(same){
-                            await sleep(500)
-                            continue
+            else{                
+                if(!forageStorage.isAccount){      
+                    let saved = false;              
+                    if (supportsPatchSync) {
+                        const patchResult = await saveWorker.getPatch();
+                        if (!patchResult.needsFullSave) {
+                            saved = await forageStorage.patchItem('database/database.bin', {
+                                patch: patchResult.patch,
+                                expectedHash: patchResult.expectedHash
+                            });
                         }
                     }
-
-                    lastDbData = dbData
-                    const z:Database = await decodeRisuSave(dbData)
-                    if(z.formatversion){
-                        await forageStorage.setItem('database/database.bin', dbData)
+                    if (!saved) {
+                        const dbData = await saveWorker.encodeLegacy();
+                        await forageStorage.setItem('database/database.bin', dbData);
+                        await forageStorage.setItem(`database/dbbackup-${(Date.now()/100).toFixed()}.bin`, dbData);
+                    } 
+                }
+                if(forageStorage.isAccount){
+                    const accountResult = await saveWorker.accountSave();
+                    if (!accountResult.shouldSave) {
+                        await sleep(500);
+                        continue;
                     }
-
-                    await sleep(3000)
+                    await forageStorage.setItem('database/database.bin', accountResult.dbData);
+                    await sleep(3000);
                 }
             }
             if(!forageStorage.isAccount){
@@ -480,7 +527,7 @@ async function getDbBackups() {
         return backups
     }
     else{
-        const keys = await forageStorage.keys()
+        const keys = await forageStorage.keys("database/dbbackup-")
 
         const backups = keys
           .filter(key => key.startsWith('database/dbbackup-'))
@@ -501,7 +548,7 @@ let usingSw = false
  * Loads the application data.
  * 
  * @returns {Promise<void>} - A promise that resolves when the data has been loaded.
- */
+*/
 export async function loadData() {
     const loaded = get(loadedStore)
     if(!loaded){
@@ -539,7 +586,7 @@ export async function loadData() {
                                 LoadingStatusState.text = `Reading Backup File ${backup}...`
                                 const backupData = await readFile(`database/dbbackup-${backup}.bin`, {baseDir: BaseDirectory.AppData})
                                 setDatabase(
-                                  await decodeRisuSave(backupData)
+                                    await decodeRisuSave(backupData)
                                 )
                                 backupLoaded = true
                             } catch (error) {
@@ -639,6 +686,9 @@ export async function loadData() {
                     characterURLImport()
                 }
             }
+            
+            await saveWorker.init(normalizeJSON(getDatabase()));
+
             LoadingStatusState.text = "Checking Unnecessary Files..."
             try {
                 await pargeChunks()
@@ -667,7 +717,7 @@ export async function loadData() {
             LoadingStatusState.text = "Checking For Format Update..."
             await checkNewFormat()
             const db = getDatabase();
-
+            
             LoadingStatusState.text = "Updating States..."
             updateColorScheme()
             updateTextThemeAndCSS()
@@ -1061,7 +1111,7 @@ function getBasename(data: string) {
  * @returns {string[]} - An array of unpargeable resources.
  */
 export function getUnpargeables(db: Database, uptype: 'basename' | 'pure' = 'basename') {
-    let unpargeable: string[] = [];
+    const unpargeable = new Set<string>();
 
     /**
      * Adds a resource to the unpargeable list if it is not already included.
@@ -1076,9 +1126,7 @@ export function getUnpargeables(db: Database, uptype: 'basename' | 'pure' = 'bas
             return;
         }
         const bn = uptype === 'basename' ? getBasename(data) : data;
-        if (!unpargeable.includes(bn)) {
-            unpargeable.push(bn);
-        }
+        unpargeable.add(bn);
     }
 
     addUnparge(db.customBackground);
@@ -1138,7 +1186,7 @@ export function getUnpargeables(db: Database, uptype: 'basename' | 'pure' = 'bas
             }
         })
     }
-    return unpargeable;
+    return Array.from(unpargeable);
 }
 
 
@@ -1393,14 +1441,14 @@ async function pargeChunks(){
         return
     }
 
-    const unpargeable = getUnpargeables(db)
+    const unpargeable = new Set(getUnpargeables(db))
     if(isTauri){
         const assets = await readDir('assets', {baseDir: BaseDirectory.AppData})
         console.log(assets)
         for(const asset of assets){
             try {
                 const n = getBasename(asset.name)
-                if(unpargeable.includes(n)){
+                if(unpargeable.has(n)){
                     console.log('unpargeable', n)
                 }
                 else{
@@ -1419,7 +1467,7 @@ async function pargeChunks(){
                 continue
             }
             const n = getBasename(asset)
-            if(unpargeable.includes(n)){
+            if(unpargeable.has(n)){
             }
             else{
                 await forageStorage.removeItem(asset)

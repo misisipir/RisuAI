@@ -5,6 +5,10 @@ const htmlparser = require('node-html-parser');
 const { existsSync, mkdirSync, readFileSync, writeFileSync } = require('fs');
 const fs = require('fs/promises')
 const crypto = require('crypto')
+const { applyPatch } = require('fast-json-patch')
+const { Packr, Unpackr, decode } = require('msgpackr')
+const fflate = require('fflate')
+
 app.use(express.static(path.join(process.cwd(), 'dist'), {index: false}));
 app.use(express.json({ limit: '50mb' }));
 app.use(express.raw({ type: 'application/octet-stream', limit: '50mb' }));
@@ -14,6 +18,20 @@ const sslPath = path.join(process.cwd(), 'server/node/ssl/certificate');
 const hubURL = 'https://sv.risuai.xyz'; 
 
 let password = ''
+
+// Configuration flags for patch-based sync
+let enablePatchSync = true
+const [major, minor, patch] = process.version.slice(1).split('.').map(Number);
+// v22.7.0, v23 and above have a bug with msgpackr that causes it to crash on encoding risu saves
+if (major >= 23 || (major === 22 && minor === 7 && patch === 0)) {
+    console.log(`[Server] Detected problematic Node.js version ${process.version}. Disabling patch-based sync.`);
+    enablePatchSync = false;
+}
+
+// In-memory database cache for patch-based sync
+let dbCache = {}
+let saveTimers = {}
+const SAVE_INTERVAL = 5000 // Save to disk after 5 seconds of inactivity
 
 const savePath = path.join(process.cwd(), "save")
 if(!existsSync(savePath)){
@@ -29,6 +47,176 @@ function isHex(str) {
     return hexRegex.test(str.toUpperCase().trim()) || str === '__password';
 }
 
+// Encoding/decoding functions for RisuSave format
+const packr = new Packr({ useRecords: false });
+const unpackr = new Unpackr({ int64AsType: 'number', useRecords: false });
+
+const magicHeader = new Uint8Array([0, 82, 73, 83, 85, 83, 65, 86, 69, 0, 7]); 
+const magicCompressedHeader = new Uint8Array([0, 82, 73, 83, 85, 83, 65, 86, 69, 0, 8]);
+
+function checkHeader(data) {
+    let header = 'raw';
+    
+    if (data.length < magicHeader.length) {
+        return 'none';
+    }
+    
+    for (let i = 0; i < magicHeader.length; i++) {
+        if (data[i] !== magicHeader[i]) {
+            header = 'none';
+            break;
+        }
+    }
+    
+    if (header === 'none') {
+        header = 'compressed';
+        for (let i = 0; i < magicCompressedHeader.length; i++) {
+            if (data[i] !== magicCompressedHeader[i]) {
+                header = 'none';
+                break;
+            }
+        }
+    }
+    
+    return header;
+}
+
+async function decodeRisuSaveServer(data) {
+    try {
+        switch(checkHeader(data)){
+            case "compressed":
+                data = data.slice(magicCompressedHeader.length)
+                return decode(fflate.decompressSync(data))
+            case "raw":
+                data = data.slice(magicHeader.length)
+                return unpackr.decode(data)
+        }
+        return unpackr.decode(data)
+    }
+    catch (error) {
+        try {
+            console.log('risudecode')
+            const risuSaveHeader = new Uint8Array(Buffer.from("\u0000\u0000RISU",'utf-8'))
+            const realData = data.subarray(risuSaveHeader.length)
+            const dec = unpackr.decode(realData)
+            return dec   
+        } catch (error) {
+            const buf = Buffer.from(fflate.decompressSync(Buffer.from(data)))
+            try {
+                return JSON.parse(buf.toString('utf-8'))                            
+            } catch (error) {
+                return unpackr.decode(buf)
+            }
+        }
+    }
+}
+
+async function encodeRisuSaveServer(data) {
+    // Encode to legacy format (no compression for simplicity)
+    const encoded = packr.encode(data);
+    const result = new Uint8Array(encoded.length + magicHeader.length);
+    result.set(magicHeader, 0);
+    result.set(encoded, magicHeader.length);
+    return result;
+}
+
+// Compositional hash function for JSON objects in O(n)
+function compositionalHash(obj) {
+    const PRIME_MULTIPLIER = 31;
+    
+    const SEED_OBJECT = 17;
+    const SEED_ARRAY = 19;
+    const SEED_STRING = 23;
+    const SEED_NUMBER = 29;
+    const SEED_BOOLEAN = 31;
+    const SEED_NULL = 37;
+    
+    function calculateHash(node) {
+        if (node === null || node === undefined) return SEED_NULL;
+
+        switch (typeof node) {
+            case 'object':
+                if (Array.isArray(node)) {
+                    let arrayHash = SEED_ARRAY;
+                    for (const item of node)
+                        arrayHash = (Math.imul(arrayHash, PRIME_MULTIPLIER) + calculateHash(item)) >>> 0;
+                    return arrayHash;
+                } else {
+                    let objectHash = SEED_OBJECT;
+                    for (const key in node)
+                        objectHash += (Math.imul(calculateHash(key), PRIME_MULTIPLIER) + calculateHash(node[key]));
+                    return objectHash >>> 0;
+                }
+
+            case 'string':
+                let strHash = 2166136261;
+                for (let i = 0; i < node.length; i++)
+                    strHash = Math.imul(strHash ^ node.charCodeAt(i), 16777619);
+                return Math.imul(SEED_STRING, PRIME_MULTIPLIER) + (strHash >>> 0);
+
+            case 'number':
+                let numHash;
+                if (Number.isInteger(node) && node >= -2147483648 && node <= 2147483647) 
+                    numHash = node >>> 0; 
+                else {
+                    const str = node.toString();
+                    numHash = 2166136261;
+                    for (let i = 0; i < str.length; i++) 
+                        numHash = Math.imul(numHash ^ str.charCodeAt(i), 16777619);
+                    numHash = numHash >>> 0;
+                }
+                return Math.imul(SEED_NUMBER, PRIME_MULTIPLIER) + numHash;
+
+            case 'boolean':
+                return Math.imul(SEED_BOOLEAN, PRIME_MULTIPLIER) + (node ? 1 : 0);
+                
+            default:
+                return 0;
+        }
+    }
+    
+    const hash = calculateHash(obj);
+    return hash.toString(16); 
+}
+// Exact equivalent of JSON.parse(JSON.stringify()) but faster
+function normalizeJSON(value) {
+    if (value === null || value === undefined) return null;
+    if (typeof value !== 'object') {
+        if (typeof value === 'number' && !isFinite(value)) return null;
+        if (typeof value === 'function' || 
+            typeof value === 'symbol' || 
+            typeof value === 'bigint') 
+            return undefined; 
+        return value;
+    }
+    if (value instanceof Date) return value.toISOString();
+    if (value instanceof RegExp || value instanceof Error) return {};
+    if (Array.isArray(value)) {
+        const result = [];
+        for (const item of value) {
+            if (item === undefined) {
+                result.push(null);
+            } else {
+                const normalized = normalizeJSON(item);
+                result.push(normalized === undefined ? null : normalized);
+            }
+        }
+        return result;
+    }
+    const result = {};
+    for (const key in value) {
+        if (Object.prototype.hasOwnProperty.call(value, key)) {
+            const propValue = value[key];
+            if (propValue !== undefined) {
+                const normalized = normalizeJSON(propValue);
+                if (normalized !== undefined) 
+                    result[key] = normalized;
+            }
+        }
+    }
+    return result;
+}
+
 app.get('/', async (req, res, next) => {
 
     const clientIP = req.headers['x-forwarded-for'] || req.ip || req.socket.remoteAddress || 'Unknown IP';
@@ -39,7 +227,7 @@ app.get('/', async (req, res, next) => {
         const mainIndex = await fs.readFile(path.join(process.cwd(), 'dist', 'index.html'))
         const root = htmlparser.parse(mainIndex)
         const head = root.querySelector('head')
-        head.innerHTML = `<script>globalThis.__NODE__ = true</script>` + head.innerHTML
+        head.innerHTML = `<script>globalThis.__NODE__ = true; globalThis.__PATCH_SYNC__ = ${enablePatchSync}</script>` + head.innerHTML
         
         res.send(root.toString())
     } catch (error) {
@@ -171,15 +359,31 @@ async function hubProxyFunc(req, res) {
         delete headersToSend.host;
         delete headersToSend.connection;
         
+        if (pathAndQuery.startsWith('/hub/')) {
+            headersToSend.origin = hubURL;
+            headersToSend.referer = hubURL + '/';
+            delete headersToSend['sec-fetch-site'];
+            delete headersToSend['sec-fetch-mode'];
+            delete headersToSend['sec-fetch-dest'];
+            delete headersToSend['sec-ch-ua'];
+            delete headersToSend['sec-ch-ua-mobile'];
+            delete headersToSend['sec-ch-ua-platform'];
+        }
+        
         const response = await fetch(externalURL, {
             method: req.method,
             headers: headersToSend,
-            body: req.method !== 'GET' && req.method !== 'HEAD' ? req : undefined,
-            redirect: 'manual',
-            duplex: 'half'
+            body: req.method !== 'GET' && req.method !== 'HEAD' ? JSON.stringify(req.body) : undefined,
+            redirect: 'manual'
         });
         
         for (const [key, value] of response.headers.entries()) {
+            // Skip encoding-related headers to prevent double decoding
+            if (key.toLowerCase() === 'content-encoding' || 
+                key.toLowerCase() === 'content-length' ||
+                key.toLowerCase() === 'transfer-encoding') {
+                continue;
+            }
             res.setHeader(key, value);
         }
         res.status(response.status);
@@ -280,6 +484,26 @@ app.get('/api/read', async (req, res, next) => {
         return;
     }
     try {
+        const fullPath = path.join(savePath, filePath);
+        
+        // Stop any pending save timer for this file
+        if (saveTimers[filePath]) {
+            clearTimeout(saveTimers[filePath]);
+            delete saveTimers[filePath];
+        }
+        
+        // write to disk if available in cache
+        if (dbCache[filePath]) {
+            try {
+                let dataToSave = await encodeRisuSaveServer(dbCache[filePath]);
+                await fs.writeFile(fullPath, dataToSave);
+            } catch (error) {
+                console.error(`[Read] Error saving ${filePath}:`, error);
+            }
+            delete dbCache[filePath];
+        }
+
+        // read from disk
         if(!existsSync(path.join(savePath, filePath))){
             res.send();
         }
@@ -333,9 +557,10 @@ app.get('/api/list', async (req, res, next) => {
         return
     }
     try {
-        const data = (await fs.readdir(path.join(savePath))).map((v) => {
-            return Buffer.from(v, 'hex').toString('utf-8')
-        })
+        const data = (await fs.readdir(path.join(savePath)))
+            .map((v) => { return Buffer.from(v, 'hex').toString('utf-8') })
+            .filter((v) => { return v.startsWith(req.headers['key-prefix'].trim()) })
+
         res.send({
             success: true,
             content: data
@@ -370,11 +595,126 @@ app.post('/api/write', async (req, res, next) => {
 
     try {
         await fs.writeFile(path.join(savePath, filePath), fileContent);
+        
+        // Clear any pending save timer for this file
+        if (saveTimers[filePath]) {
+            clearTimeout(saveTimers[filePath]);
+            delete saveTimers[filePath];
+        }
+
+        // Clear cache for this file since it was directly written
+        if (dbCache[filePath]) delete dbCache[filePath];
+
         res.send({
             success: true
         });
     } catch (error) {
         next(error);
+    }
+});
+
+app.post('/api/patch', async (req, res, next) => {
+    // Check if patch sync is enabled
+    if (!enablePatchSync) {
+        res.status(404).send({
+            error: 'Patch sync is not enabled'
+        });
+        return;
+    }
+    
+    if(req.headers['risu-auth'].trim() !== password.trim()){
+        console.log('incorrect')
+        res.status(400).send({
+            error:'Password Incorrect'
+        });
+        return
+    }
+    const filePath = req.headers['file-path'];
+    const patch = req.body.patch;
+    const expectedHash = req.body.expectedHash;
+    
+    if (!filePath || !patch || !expectedHash) {
+        res.status(400).send({
+            error:'File path, patch, and expected hash required'
+        });
+        return;
+    }
+    if(!isHex(filePath)){
+        res.status(400).send({
+            error:'Invaild Path'
+        });
+        return;
+    }
+
+    try {
+        const decodedFilePath = Buffer.from(filePath, 'hex').toString('utf-8');
+        
+        // Load database into memory if not already cached
+        if (!dbCache[filePath]) {
+            const fullPath = path.join(savePath, filePath);
+            if (existsSync(fullPath)) {
+                const fileContent = await fs.readFile(fullPath);
+                dbCache[filePath] = normalizeJSON(await decodeRisuSaveServer(fileContent));
+            } 
+            else {
+                dbCache[filePath] = {};
+            }
+        }
+        
+        // Calculate current hash of the server data using compositional hash
+        const serverHash = compositionalHash(dbCache[filePath]);
+        
+        // Check hash mismatch
+        if (expectedHash !== serverHash) {
+            console.log(`[Patch] Hash mismatch for ${decodedFilePath}: expected=${expectedHash}..., server=${serverHash}...`);
+            res.status(409).send({
+                error: 'Hash mismatch - data out of sync',
+            });
+            return;
+        }
+        
+        // Apply patch to in-memory database
+        const result = applyPatch(dbCache[filePath], patch, true);
+
+        // Schedule save to disk (debounced)
+        if (saveTimers[filePath]) {
+            clearTimeout(saveTimers[filePath]);
+        }
+        saveTimers[filePath] = setTimeout(async () => {
+            try {
+                const fullPath = path.join(savePath, filePath);
+                let dataToSave = await encodeRisuSaveServer(dbCache[filePath]);
+                await fs.writeFile(fullPath, dataToSave);
+                // Create backup for database files after successful save
+                if (decodedFilePath.includes('database/database.bin')) {
+                    try {
+                        const timestamp = Math.floor(Date.now() / 100).toString();
+                        const backupFileName = `database/dbbackup-${timestamp}.bin`;
+                        const backupFilePath = Buffer.from(backupFileName, 'utf-8').toString('hex');
+                        const backupFullPath = path.join(savePath, backupFilePath);
+                        // Create backup using the same data that was just saved
+                        await fs.writeFile(backupFullPath, dataToSave);
+                    } catch (backupError) {
+                        console.error(`[Patch] Error creating backup:`, backupError);
+                    }
+                }
+            } catch (error) {
+                dbCache[filePath] = {}; // trigger hash mismatch on next patch and fallback to full save
+                console.error(`[Patch] Error saving ${filePath}:`, error);
+            } finally {
+                delete saveTimers[filePath];
+            }
+        }, SAVE_INTERVAL);
+
+        res.send({
+            success: true,
+            appliedOperations: result.length,
+        });
+    } catch (error) {
+        console.error(`[Patch] Error applying patch to ${filePath}:`, error.name);
+        res.status(500).send({
+            error: 'Patch application failed: ' + (error && error.message ? error.message : error)
+        });
     }
 });
 
@@ -406,19 +746,19 @@ async function startServer() {
     try {
       
         const port = process.env.PORT || 6001;
-        const httpsOptions = await getHttpsOptions();
-
-        if (httpsOptions) {
+        const httpsOptions = await getHttpsOptions();        if (httpsOptions) {
             // HTTPS
             https.createServer(httpsOptions, app).listen(port, () => {
                 console.log("[Server] HTTPS server is running.");
                 console.log(`[Server] https://localhost:${port}/`);
+                console.log(`[Server] Patch sync: ${enablePatchSync ? 'ENABLED' : 'DISABLED'}`);
             });
         } else {
             // HTTP
             app.listen(port, () => {
                 console.log("[Server] HTTP server is running.");
                 console.log(`[Server] http://localhost:${port}/`);
+                console.log(`[Server] Patch sync: ${enablePatchSync ? 'ENABLED' : 'DISABLED'}`);
             });
         }
     } catch (error) {
