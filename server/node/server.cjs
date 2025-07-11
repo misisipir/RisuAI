@@ -10,8 +10,8 @@ const { Packr, Unpackr, decode } = require('msgpackr')
 const fflate = require('fflate')
 
 app.use(express.static(path.join(process.cwd(), 'dist'), {index: false}));
-app.use(express.json({ limit: '50mb' }));
-app.use(express.raw({ type: 'application/octet-stream', limit: '50mb' }));
+app.use(express.json({ limit: '500mb' }));
+app.use(express.raw({ type: 'application/octet-stream', limit: '500mb' }));
 const {pipeline} = require('stream/promises')
 const https = require('https');
 const sslPath = path.join(process.cwd(), 'server/node/ssl/certificate');

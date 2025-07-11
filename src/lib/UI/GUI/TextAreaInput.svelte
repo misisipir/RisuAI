@@ -45,6 +45,7 @@
             class:py-2={padding}
             {autocomplete}
             {placeholder}
+            {disabled}
             id={id}
             bind:value={value}
             oninput={(e) => {
@@ -125,6 +126,7 @@
         className?: string;
         optimaizedInput?: boolean;
         highlight?: boolean;
+        disabled?: boolean;
         onchange?: () => void;
     }
 
@@ -142,7 +144,8 @@
         className = '',
         optimaizedInput = true,
         highlight = false,
-        onchange = () => {}
+        onchange = () => {},
+        disabled = false
     }: Props = $props();
     let selectingAutoComplete = $state(0)
     let highlightId = highlight ? getNewHighlightId() : 0

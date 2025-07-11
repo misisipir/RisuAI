@@ -8,24 +8,29 @@
     import {downloadFile} from "src/ts/globalApi.svelte";
     import {alertError, alertNormal} from "src/ts/alert";
     import {selectMultipleFile} from "src/ts/util";
-    import hljs from 'highlight.js/lib/core'
-    import 'highlight.js/styles/atom-one-dark.min.css'
-    import json from 'highlight.js/lib/languages/json'
-
+    import {JSONEditor} from 'svelte-jsoneditor'
     import {v4} from "uuid";
-    import {MCPClient, type MCPTool} from "../../../../ts/process/mcp/mcplib";
-    import CheckInput from "../../../UI/GUI/CheckInput.svelte";
-    import {FileSystemClient} from "../../../../ts/process/mcp/filesystemclient";
-    import {RisuAccessClient} from "../../../../ts/process/mcp/risuaccess";
-    import {AIAccessClient} from "../../../../ts/process/mcp/aiaccess";
-    import {GoogleSearchClient} from "../../../../ts/process/mcp/googlesearchclient";
-    import {MCPClientLike} from "../../../../ts/process/mcp/internalmcp";
-    import TextAreaInput from "../../../UI/GUI/TextAreaInput.svelte";
+    import {MCPClient, type MCPTool} from "src/ts/process/mcp/mcplib";
+    import CheckInput from "src/lib/UI/GUI/CheckInput.svelte";
+    import {FileSystemClient} from "src/ts/process/mcp/filesystemclient";
+    import {RisuAccessClient} from "src/ts/process/mcp/risuaccess";
+    import {AIAccessClient} from "src/ts/process/mcp/aiaccess";
+    import {GoogleSearchClient} from "src/ts/process/mcp/googlesearchclient";
+    import {MCPClientLike} from "src/ts/process/mcp/internalmcp";
     import {DownloadIcon, FolderPlusIcon, HardDriveUploadIcon, PlusIcon, TrashIcon} from "lucide-svelte";
+    import AdvancedChatEditor from "src/lib/ChatScreens/AdvancedChatEditor.svelte";
+    import OptionInput from "src/lib/UI/GUI/OptionInput.svelte";
+    import SelectInput from "src/lib/UI/GUI/SelectInput.svelte";
+    import Arcodion from "src/lib/UI/Arcodion.svelte";
+    import {exportRegex, importRegex} from "src/ts/process/scripts";
+    import TextAreaInput from "src/lib/UI/GUI/TextAreaInput.svelte";
+    import RegexList from "src/lib/SideBars/Scripts/RegexList.svelte";
+    import TriggerList from "src/lib/SideBars/Scripts/TriggerList.svelte";
+    import Help from "src/lib/Others/Help.svelte";
+    import AdvancedCodeEditor from "src/lib/ChatScreens/AdvancedCodeEditor.svelte";
 
     let submenu = $state(0)
     let mcpTools = $state<MCPTool[]>([])
-    hljs.registerLanguage('json', json)
 
     interface Props {
         currentModule: RisuModule;
@@ -49,7 +54,6 @@
                 secondkey: "",
                 selective: false
             })
-
             currentModule.lorebook = currentModule.lorebook
         }
     }
@@ -59,9 +63,12 @@
             if (!currentModule.mcp.tools) currentModule.mcp.tools = []
             currentModule.mcp.tools.push({
                 annotations: [],
-                inputSchema: {},
-                inputSchemaString: '{}',
-                name: '',
+                inputSchema: {
+                    type: 'object',
+                    properties: {},
+                    required: [],
+                },
+                name: `Tool Name #${currentModule.mcp.tools.length + 1}`,
                 description: '',
                 functionName: '',
                 code: '',
@@ -69,6 +76,7 @@
             currentModule.mcp.tools = currentModule.mcp.tools
         }
     }
+
     function deleteTool(index) {
         if (Array.isArray(currentModule.mcp.tools) && isModuleMcp()) {
             currentModule.mcp.tools.splice(index, 1)
@@ -197,6 +205,9 @@
                 }
             }
         } else if (currentModule.mcp.url.startsWith('module:')) {
+            if (!currentModule.trigger) currentModule.trigger = []
+            if (!currentModule.regex) currentModule.regex = []
+            if (!currentModule.mcp.commonCode) currentModule.mcp.commonCode = ''
             if (!currentModule.mcp.tools) currentModule.mcp.tools = []
             if (!currentModule.mcp.disabledTools) currentModule.mcp.disabledTools = {}
             const copy = [];
@@ -223,7 +234,6 @@
             }).finally(() => {
         })
     }
-
 </script>
 
 <div class="flex w-full rounded-md border border-darkborderc mb-4 overflow-x-auto h-16 min-h-16 overflow-y-clip">
@@ -241,6 +251,16 @@
     <button onclick={() => {
         submenu = 2
     }} class="p-2 flex-1 border-r border-darkborderc" class:bg-darkbutton={submenu === 2}>
+        <span>{language.regex}</span>
+    </button>
+    <button onclick={() => {
+        submenu = 3
+    }} class="p-2 flex-1 border-r border-darkborderc" class:bg-darkbutton={submenu === 3}>
+        <span>{language.trigger}</span>
+    </button>
+    <button onclick={() => {
+        submenu = 4
+    }} class="p-2 flex-1 border-r border-darkborderc" class:bg-darkbutton={submenu === 4}>
         <span>Tools</span>
     </button>
 </div>
@@ -252,6 +272,9 @@
     <TextInput bind:value={currentModule.description} className="mt-1" size="sm"/>
     <span class="mt-4">URL</span>
     <TextInput bind:value={currentModule.mcp.url} className="mt-1" size="sm"/>
+    <span class="mt-4">{language.customPromptTemplateToggle}
+        <Help key='customPromptTemplateToggle'/></span>
+    <TextAreaInput bind:value={currentModule.customModuleToggle}/>
 {/if}
 {#if submenu === 1 && (Array.isArray(currentModule.lorebook))}
     <LoreBookList externalLoreBooks={currentModule.lorebook}/>
@@ -272,7 +295,41 @@
         </button>
     </div>
 {/if}
-{#if submenu === 2 && (!isModuleMcp()) && (Array.isArray(mcpTools))}
+{#if submenu === 2 && (Array.isArray(currentModule.regex))}
+    <TextAreaInput bind:value={currentModule.backgroundEmbedding} className="mt-2" placeholder={language.backgroundHTML}
+                   size="sm"/>
+    <RegexList bind:value={currentModule.regex}/>
+    <div class="text-textcolor2 mt-2 flex gap-2">
+        <button class="font-medium cursor-pointer hover:text-green-500" onclick={() => {
+            addRegex()
+        }}>
+            <PlusIcon/>
+        </button>
+        <button class="font-medium cursor-pointer hover:text-green-500" onclick={() => {
+            exportRegex(currentModule.regex)
+        }}>
+            <DownloadIcon/>
+        </button>
+        <button class="font-medium cursor-pointer hover:text-green-500" onclick={async () => {
+            currentModule.regex = await importRegex(currentModule.regex)
+        }}>
+            <HardDriveUploadIcon/>
+        </button>
+    </div>
+{/if}
+{#if submenu === 3 && (Array.isArray(currentModule.trigger))}
+    <div class="flex w-full">
+    <div class="max-w-screen-md">
+    <TriggerList bind:value={currentModule.trigger} lowLevelAble={currentModule.lowLevelAccess}/>
+    </div>
+
+    <div class="flex items-center mt-4">
+        <CheckInput bind:check={currentModule.lowLevelAccess} name={language.lowLevelAccess}/>
+        <span> <Help key="lowLevelAccess" name={language.lowLevelAccess}/></span>
+    </div>
+    </div>
+{/if}
+{#if submenu === 4 && (!isModuleMcp()) && (Array.isArray(mcpTools))}
     {#each mcpTools as tool, i}
         <div class="flex items-center justify-between p-2 border-b gap-4 border-darkborderc">
             <span class="text-textcolor">{tool.name}</span>
@@ -281,44 +338,57 @@
         </div>
     {/each}
 {/if}
-{#if submenu === 2 && isModuleMcp() && (Array.isArray(currentModule.mcp.tools))}
-    {#each currentModule.mcp.tools as tool, i}
-        <div class="grid grid-cols-1 items-center justify-between p-2 border-b gap-4 border-darkborderc">
-            <span>Tool Name</span>
-            <div class="flex gap-4">
-                <TextInput bind:value={tool.name} className="w-full flex-1" placeholder="Tool Name"/>
-                <CheckInput bind:check={currentModule.mcp.disabledTools[tool.name]} className="">
-                    Enable Tool
-                </CheckInput>
-                <button onclick={() => {deleteTool(i)}} class="hover:text-textcolor cursor-pointer ml-1">
-                    <TrashIcon/>
-                </button>
-            </div>
-            <span>Tool description</span>
-            <TextInput bind:value={tool.description} className="w-full" placeholder="Tool Description"/>
-            <span>Tool functionName</span>
-            <TextInput bind:value={tool.functionName} className="w-full" placeholder="Function Name"/>
-            <span>Tool inputSchema</span>
-            <div class="text-xs">
-                {@html hljs.highlight(tool.inputSchemaString, {language: 'json'}).value}
-            </div>
-            <TextAreaInput highlight={true} bind:value={tool.inputSchemaString} className="w-full" placeholder="Input Schema (JSON)"
-                           onchange={()=>{
-                               const temp = {...tool.inputSchema}
-                               try{
-                                   tool.inputSchema = JSON.parse(tool.inputSchemaString);
-                               }catch(e){
-                                   tool.inputSchema = temp
-                               }
-                           }}
-            />
-            <span>Tool code</span>
-            <TextAreaInput bind:value={tool.code} className="w-full" placeholder="Tool Code"/>
+{#if submenu === 4 && isModuleMcp() && (Array.isArray(currentModule.mcp.tools))}
+    <div class="flex flex-col gap-2 w-full">
+        <span><span class="pr-4">Tools option</span>
+                    <SelectInput bind:value={currentModule.mcp.codeType}>
+            <OptionInput value="lua">Lua</OptionInput>
+            <OptionInput value="py">Python</OptionInput>
+        </SelectInput>
+        </span>
+        <div class="max-w-screen-md">
+            <AdvancedCodeEditor
+                    bind:value={currentModule.mcp.commonCode}
+                    mode={currentModule.mcp.codeType === 'py'? 'python' : 'lua'}/>
+
         </div>
-    {/each}
-    <div class="text-textcolor2 mt-2 flex">
-        <button onclick={() => {addTool()}} class="hover:text-textcolor cursor-pointer ml-1">
-            <PlusIcon/>
-        </button>
+
+        {#each currentModule.mcp.tools as tool, i}
+            <Arcodion name={tool.name} styled>
+                <div class="grid grid-cols-1 items-center justify-between p-2 border-b gap-4 border-darkborderc">
+                    <span>Tool Name</span>
+                    <div class="flex gap-4">
+                        <TextInput bind:value={tool.name} className="w-full flex-1" placeholder="Tool Name"/>
+                        <CheckInput bind:check={currentModule.mcp.disabledTools[tool.name]} className="">
+                            Enable Tool
+                        </CheckInput>
+                        <button onclick={() => {deleteTool(i)}} class="hover:text-textcolor cursor-pointer ml-1">
+                            <TrashIcon/>
+                        </button>
+                    </div>
+                    <span>Tool description</span>
+                    <TextInput bind:value={tool.description} className="w-full" placeholder="Tool Description"/>
+                    <span>Tool functionName</span>
+                    <TextInput bind:value={tool.functionName} className="w-full" placeholder="Function Name"/>
+                    <span>Tool inputSchema</span>
+                    <JSONEditor {...{content: {json: tool.inputSchema}}} onChange={(updatedContent, previousContent, { contentErrors, patchResult })=>{
+                if (typeof updatedContent === 'object' && 'json' in updatedContent) {
+                    tool.inputSchema = updatedContent.json;
+                }
+            }}/>
+                    <span>Tool code</span>
+                    <div class="max-w-screen-md">
+                        <AdvancedCodeEditor bind:value={tool.code}
+                                            className="max-w-44"
+                                            mode={currentModule.mcp.codeType === 'py'? 'python' : 'lua'}/>
+                    </div>
+                </div>
+            </Arcodion>
+        {/each}
+        <div class="text-textcolor2 mt-2 flex">
+            <button onclick={() => {addTool()}} class="hover:text-textcolor cursor-pointer ml-1">
+                <PlusIcon/>
+            </button>
+        </div>
     </div>
 {/if}

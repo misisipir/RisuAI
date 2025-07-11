@@ -14,6 +14,8 @@
     import { PlusIcon } from "lucide-svelte";
     import TriggerV2List from "./TriggerList2.svelte";
     import { DBState } from "src/ts/stores.svelte";
+    import AdvancedChatEditor from "src/lib/ChatScreens/AdvancedChatEditor.svelte";
+    import AdvancedCodeEditor from "src/lib/ChatScreens/AdvancedCodeEditor.svelte";
     interface Props {
         value?: triggerscript[];
         lowLevelAble?: boolean;
@@ -144,7 +146,9 @@
     <span class="text-draculared">{language.triggerV1Warning}</span>
 {/if}
 {#if value?.[0]?.effect?.[0]?.type === 'triggerlua'}
-    <TextAreaInput margin="both" autocomplete="off" bind:value={value[0].effect[0].code}></TextAreaInput>
+    <div class="contain w-full max-w-full mt-2 flex flex-col border-selected border-1 rounded-md p-3">
+        <AdvancedCodeEditor bind:value={value[0].effect[0].code} mode="lua"/>
+    </div>
     <Button onclick={() => {
         openURL(hubURL + '/redirect/docs/lua')
     }}>{language.helpBlock}</Button>

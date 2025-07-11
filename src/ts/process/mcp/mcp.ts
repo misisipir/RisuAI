@@ -42,6 +42,8 @@ export async function initializeMCPs(additionalMCPs?: string[]) {
                 }
                 MCPs[mcp] = new ModuleMCP(mcp, {
                     tools: tools,
+                    commonCode: mcpModule?.mcp?.commonCode || '',
+                    codeType: mcpModule?.mcp?.codeType || 'lua',
                     name: mcpModule?.name || 'Module MCP',
                     instructions: mcpModule?.description || 'MCP from module',
                     version: mcpModule?.mcp?.version || '1.0.0',

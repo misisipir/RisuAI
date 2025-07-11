@@ -15,10 +15,11 @@ import type {MCPTool} from "./mcp/mcplib";
 export interface MCPModule{
     url: string
     version?: string
+    commonCode?: string
+    codeType: 'lua' | 'py'
     tools?:(MCPTool & {
         functionName: string
         code: string
-        inputSchemaString: string
     })[]
     disabledTools: {
         [key: string]: boolean

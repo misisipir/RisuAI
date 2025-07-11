@@ -8,6 +8,8 @@ import {MCPClientLike} from "./internalmcp";
 //Original MCPClient is located in src/ts/process/mcp/mcplib.ts
 export class ModuleMCP extends MCPClientLike {
 
+    commonCode: string
+    codeType: 'lua' | 'py'
     tools: {
         [key: string]: (MCPTool & {
             functionName: string
@@ -19,6 +21,8 @@ export class ModuleMCP extends MCPClientLike {
         name: string
         version: string
         instructions: string
+        codeType: 'lua' | 'py'
+        commonCode?: string
         tools: {
             [key: string]: (MCPTool & {
                 functionName: string
@@ -29,6 +33,8 @@ export class ModuleMCP extends MCPClientLike {
         super(url);
         const {name, version, instructions, tools} = args;
         this.tools = tools || {};
+        this.codeType = args.codeType || 'lua';
+        this.commonCode = args.commonCode || '';
         this.serverInfo.serverInfo.name = name;
         this.serverInfo.serverInfo.version = version;
         this.serverInfo.instructions = instructions || `Module ${name} v${version} is ready to use.`;
@@ -56,11 +62,14 @@ export class ModuleMCP extends MCPClientLike {
             }];
 
         const data = await runScripted(
-            this.tools[toolName].code,
+            `${this.commonCode}
+
+${this.tools[toolName].code}`,
             {
                 lowLevelAccess: false,
                 args: [JSON.stringify(args)],
                 mode: this.tools[toolName].functionName,
+                type: this.codeType
             }
         );
         return [{
