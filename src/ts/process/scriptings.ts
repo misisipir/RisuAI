@@ -56,6 +56,7 @@ export async function runScripted(code:string, arg:{
     lowLevelAccess?: boolean,
     meta?: object,
     mode?: string,
+    args?: any[],
     type?: 'lua'|'py'
 }){
     const type: 'lua'|'py' = arg.type ?? 'lua'
@@ -65,6 +66,7 @@ export async function runScripted(code:string, arg:{
     const getVar = arg.getVar ?? getChatVar
     const meta = arg.meta ?? {}
     const mode = arg.mode ?? 'manual'
+    const args = arg.args ?? []
 
     let chat = arg.chat ?? getCurrentChat()
     let stopSending = false
@@ -283,10 +285,10 @@ export async function runScripted(code:string, arg:{
                 }
                 
                 if(lastRequestsCount > 5){
-                    return {
+                    return JSON.stringify({
                         status: 429,
                         data: 'Too many requests. you can request 5 times per minute'
-                    }
+                    })
                 }
 
                 lastRequestsCount++
@@ -294,17 +296,17 @@ export async function runScripted(code:string, arg:{
                 try {
                     //for security and other reasons, only get request in 120 char is allowed
                     if(url.length > 120){
-                        return {
+                        return JSON.stringify({
                             status: 413,
                             data: 'URL to large. max is 120 characters'
-                        }
+                        })
                     }
 
                     if(!url.startsWith('https://')){
-                        return {
+                        return JSON.stringify({
                             status: 400,
                             data: "Only https requests are allowed"
-                        }
+                        })
                     }
 
                     const bannedURL = [
@@ -316,10 +318,10 @@ export async function runScripted(code:string, arg:{
                     for(const burl of bannedURL){
 
                         if(url.startsWith(burl)){
-                            return {
+                            return JSON.stringify({
                                 status: 400,
                                 data: "request to " + url + ' is not allowed'
-                            }
+                            })
                         }
                     }
 
@@ -328,16 +330,16 @@ export async function runScripted(code:string, arg:{
                         method: "GET"
                     })
                     const text = await d.text()
-                    return {
+                    return JSON.stringify({
                         status: d.status,
                         data: text
-                    }
+                    })
 
                 } catch (error) {
-                    return {
+                    return JSON.stringify({
                         status: 400,
                         data: 'internal error'
-                    }
+                    })
                 }
             })
 
@@ -866,7 +868,7 @@ export async function runScripted(code:string, arg:{
                     default:{
                         const func = luaEngine.global.get(mode)
                         if(func){
-                            res = await func(accessKey)
+                            res = await func(accessKey, ...args)
                         }
                         break
                     }

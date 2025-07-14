@@ -1,11 +1,15 @@
 //Although these are TECHNICALLY not MCPs, but for the users, we will stick to that name
 
 import type { MCPTool, RPCToolCallContent } from "./mcplib";
+import {runScripted} from "../scriptings";
 
 //template for MCPClient-like classes that can be used in the MCP system
 //Original MCPClient is located in src/ts/process/mcp/mcplib.ts
 export class MCPClientLike {
     url: string;
+    disableTools?: {
+        [toolName: string]: boolean;
+    }
     serverInfo: {
         protocolVersion: string;
         capabilities: {
@@ -39,6 +43,12 @@ export class MCPClientLike {
     async getToolList(): Promise<MCPTool[]> {
         return [];
     }
+
+    isDisableTools(tool:string) {
+        if ( this.disableTools[tool] === undefined ) return true;
+        return this.disableTools[tool];
+    }
+
 
     async callTool(toolName: string, args: any): Promise<RPCToolCallContent[]> {
         return [{
