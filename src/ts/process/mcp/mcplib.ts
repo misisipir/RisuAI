@@ -1,19 +1,19 @@
-import { v4 } from "uuid"
-import { fetchNative, openURL } from "../../globalApi.svelte"
-import { alertInput } from "../../alert";
+import {v4} from "uuid"
+import {fetchNative, openURL} from "../../globalApi.svelte"
+import {alertInput} from "../../alert";
 
 export type MCPPrompt = {
     name: string;              // Unique identifier for the prompt
     description?: string;      // Human-readable description
-    arguments?:{               // Optional list of arguments
+    arguments?: {               // Optional list of arguments
         name: string;          // Argument identifier
         description?: string;  // Argument description
         required?: boolean;    // Whether argument is required
     }[]
-    url?:string
+    url?: string
 }
 
-export type MCPTool ={
+export type MCPTool = {
     name: string
     description: string
     inputSchema: any // JSON schema for input validation
@@ -38,8 +38,8 @@ export type JsonPing = {
 }
 
 export type RPCRequestResult = {
-    rpc:JsonRPC,
-    http:{
+    rpc: JsonRPC,
+    http: {
         status: number,
         headers: Record<string, string>
     }
@@ -56,7 +56,7 @@ export type RPCToolCallTextContent = {
 }
 
 export type RPCToolCallImageAudioContent = {
-    type: 'image'|'audio',
+    type: 'image' | 'audio',
     data: string // Base64 encoded image
     mimeType: string // e.g. 'image/png', 'image/jpeg'
 }
@@ -73,24 +73,27 @@ export type RPCToolCallContentResource = {
 export type RPCToolCallContent = RPCToolCallTextContent | RPCToolCallImageAudioContent | RPCToolCallContentResource
 
 
-export class MCPClient{
-    mcpClientObjectId:string = v4()
-    sessionId:string|null = null
-    initialized:boolean = false
-    url:string
-    sseEndpoint:string
-    accessToken:string|null = null
-    sseResponses:Record<string, JsonRPC> = {}
-    sseIdDone:Set<string|number> = new Set()
-    protocolVersion:'2025-03-26' | '2024-11-05' = '2025-03-26'
-    sses:{
-        stream:ReadableStream,
-        abortController?:AbortController
+export class MCPClient {
+    mcpClientObjectId: string = v4()
+    sessionId: string | null = null
+    initialized: boolean = false
+    url: string
+    sseEndpoint: string
+    accessToken: string | null = null
+    sseResponses: Record<string, JsonRPC> = {}
+    sseIdDone: Set<string | number> = new Set()
+    protocolVersion: '2025-03-26' | '2024-11-05' = '2025-03-26'
+    disableTools?: {
+        [key: string]: boolean
+    }
+    sses: {
+        stream: ReadableStream,
+        abortController?: AbortController
     }[] = []
     customTransport?: {
-        send: (message:JsonRPC) => void|Promise<void>,
-        addListener: (callback:(message:JsonRPC) => void|Promise<void>) => void,
-        removeListener: (callback:(message:JsonRPC) => void|Promise<void>) => void
+        send: (message: JsonRPC) => void | Promise<void>,
+        addListener: (callback: (message: JsonRPC) => void | Promise<void>) => void,
+        removeListener: (callback: (message: JsonRPC) => void | Promise<void>) => void
     }
     onDestroy: (() => void) | null = null
     serverInfo: {
@@ -104,7 +107,7 @@ export class MCPClient{
         },
         instructions?: string
     }
-    cached:{
+    cached: {
         prompts?: MCPPrompt[],
         tools?: MCPTool[]
     } = {
@@ -112,30 +115,43 @@ export class MCPClient{
         tools: []
     }
     registerRefreshToken: ((arg: {
-        clientId:string
-        clientSecret:string
-        refreshToken:string
-        tokenUrl:string
+        clientId: string
+        clientSecret: string
+        refreshToken: string
+        tokenUrl: string
     }) => void) | null = null
 
     getRefreshToken: (() => Promise<{
-        clientId:string
-        clientSecret:string
-        refreshToken:string
-        tokenUrl:string
+        clientId: string
+        clientSecret: string
+        refreshToken: string
+        tokenUrl: string
     }>) | null = null
 
-    constructor(url:string, arg:{
-        accessToken?:string
-        debug?:boolean
-    } = {}){
+    constructor(url: string, arg: {
+        accessToken?: string
+        debug?: boolean
+        disableTools?: {
+            [key: string]: boolean
+        }
+    } = {}) {
         this.url = url
-        if(arg.accessToken){
+        if (arg.disableTools) {
+            this.disableTools = arg.disableTools
+        }
+        if (arg.accessToken) {
             this.accessToken = arg.accessToken
         }
     }
 
-    async connectSSE(stream:ReadableStream, abortController?:AbortController){
+    isDisableTools(tool:string) {
+        if (this.disableTools[tool] === undefined ) {
+            return true;
+        }
+        return this.disableTools[tool];
+    }
+
+    async connectSSE(stream: ReadableStream, abortController?: AbortController) {
         const reader = stream.getReader()
         const decoder = new TextDecoder("utf-8")
         let buffer = ""
@@ -144,37 +160,36 @@ export class MCPClient{
             abortController: abortController
         })
 
-        while(true){
+        while (true) {
             const {done, value} = await reader.read()
-            if(done) break
+            if (done) break
 
             buffer += decoder.decode(value, {stream: true})
 
             let parts = buffer.split("\n\n")
             buffer = parts.pop() || ""
 
-            for(const part of parts){
+            for (const part of parts) {
                 let lines = part.split("\n")
                 let data = ""
                 let eventName = ""
-                for(const line of lines){
-                    if(line.startsWith("data: ")){
+                for (const line of lines) {
+                    if (line.startsWith("data: ")) {
                         data += line.slice(6) + "\n"
-                    }
-                    else if(line.startsWith("event: ")){
+                    } else if (line.startsWith("event: ")) {
                         eventName = line.slice(7).trim()
                     }
                 }
 
                 data = data.trim()
-                if(data){
+                if (data) {
                     console.log("MCP SSE Data", {
                         eventName: eventName,
                         data: data
                     })
 
-                    if(eventName === 'endpoint'){
-                        const sseEventDetail:SseEventDetail = {
+                    if (eventName === 'endpoint') {
+                        const sseEventDetail: SseEventDetail = {
                             mcpClientObjectId: this.mcpClientObjectId,
                             data: {
                                 jsonrpc: "2.0",
@@ -187,16 +202,15 @@ export class MCPClient{
                         document.dispatchEvent(new CustomEvent("mcp-sse", {
                             detail: sseEventDetail
                         }))
-                    }
-                    else{
+                    } else {
                         try {
-                            const jsonData = JSON.parse(data) as JsonRPC|JsonPing
-                            if(this.sseIdDone.has(jsonData.id)){
+                            const jsonData = JSON.parse(data) as JsonRPC | JsonPing
+                            if (this.sseIdDone.has(jsonData.id)) {
                                 continue
                             }
 
                             //@ts-ignore
-                            if(jsonData.method === 'ping'){
+                            if (jsonData.method === 'ping') {
                                 await this.request('response', {}, {
                                     notifications: true,
                                     initMethod: 'none',
@@ -206,7 +220,7 @@ export class MCPClient{
                                 continue
                             }
 
-                            const sseEventDetail:SseEventDetail = {
+                            const sseEventDetail: SseEventDetail = {
                                 mcpClientObjectId: this.mcpClientObjectId,
                                 data: jsonData,
                             }
@@ -214,18 +228,19 @@ export class MCPClient{
                                 detail: sseEventDetail
                             }))
                             this.sseIdDone.add(jsonData.id)
-                        } catch (error) {}
+                        } catch (error) {
+                        }
                     }
                 }
             }
-        }        
+        }
     }
 
-    async request(method:string, params?:any, options:{
-        notifications?:boolean,
-        initMethod?:'init' | 'none',
-        id?: string|number
-    } = {}):Promise<RPCRequestResult>{
+    async request(method: string, params?: any, options: {
+        notifications?: boolean,
+        initMethod?: 'init' | 'none',
+        id?: string | number
+    } = {}): Promise<RPCRequestResult> {
         options ??= {}
         const initMethod = options.initMethod || 'none'
         let httpStatus = 500
@@ -243,22 +258,20 @@ export class MCPClient{
             params: params
         }
 
-        if(method !== 'response'){
-            if(options.notifications){
+        if (method !== 'response') {
+            if (options.notifications) {
                 delete body.params
                 delete body.id
-            }
-
-            else if(!params){
+            } else if (!params) {
                 delete body.params
             }
         }
 
-        if(this.customTransport){
+        if (this.customTransport) {
             return new Promise<RPCRequestResult>(async (resolve) => {
                 await this.customTransport.send(body as JsonRPC)
-                const func = (message:JsonRPC) => {
-                    if(message.id === body.id){
+                const func = (message: JsonRPC) => {
+                    if (message.id === body.id) {
                         resolve({
                             rpc: message,
                             http: {
@@ -276,26 +289,26 @@ export class MCPClient{
 
         try {
 
-            const headers:Record<string, string> = !this.sseEndpoint ? {
+            const headers: Record<string, string> = !this.sseEndpoint ? {
                 "Content-Type": "application/json",
-                "Accept":  "application/json, text/event-stream"
+                "Accept": "application/json, text/event-stream"
             } : {
                 "Content-Type": "application/json",
-                "Accept":  "*/*"
+                "Accept": "*/*"
             }
 
-            if(this.sessionId){
+            if (this.sessionId) {
                 headers['Mcp-Session-Id'] = this.sessionId
             }
 
-            if(this.accessToken){
+            if (this.accessToken) {
                 headers['Authorization'] = `Bearer ${this.accessToken}`
             }
 
             const abortController = new AbortController()
             const requestParams = {
                 body: JSON.stringify(body),
-                method:  "POST",
+                method: "POST",
                 headers: headers,
                 signal: abortController.signal
             } as {
@@ -305,17 +318,17 @@ export class MCPClient{
                 signal?: AbortSignal
             }
 
-            if(requestParams.method === "GET"){
+            if (requestParams.method === "GET") {
                 delete requestParams.body
             }
 
-            let responsePromise:Promise<RPCRequestResult> | null = null
-            if(this.sseEndpoint && !options.notifications){
+            let responsePromise: Promise<RPCRequestResult> | null = null
+            if (this.sseEndpoint && !options.notifications) {
                 responsePromise = new Promise<RPCRequestResult>((resolve) => {
-                    const sseListener = (event:CustomEvent<SseEventDetail>) => {
-                        if(event.detail.mcpClientObjectId !== this.mcpClientObjectId) return
+                    const sseListener = (event: CustomEvent<SseEventDetail>) => {
+                        if (event.detail.mcpClientObjectId !== this.mcpClientObjectId) return
                         const data = event.detail.data
-                        if(data.id === body.id){
+                        if (data.id === body.id) {
                             document.removeEventListener("mcp-sse", sseListener)
                             resolve({
                                 rpc: data,
@@ -332,7 +345,7 @@ export class MCPClient{
 
             const response = await fetchNative(url, requestParams)
 
-            if(this.sseEndpoint && options.notifications){
+            if (this.sseEndpoint && options.notifications) {
                 return {
                     rpc: {
                         jsonrpc: "2.0",
@@ -346,9 +359,9 @@ export class MCPClient{
                 }
             }
 
-            if(response.status > 299 && responsePromise){
+            if (response.status > 299 && responsePromise) {
                 //invoke error handler
-                const details:SseEventDetail = {
+                const details: SseEventDetail = {
                     mcpClientObjectId: this.mcpClientObjectId,
                     data: {
                         jsonrpc: "2.0",
@@ -370,31 +383,34 @@ export class MCPClient{
             }
 
 
-            if(responsePromise){
+            if (responsePromise) {
                 return responsePromise
             }
-            
-            if(
+
+            if (
                 (this.sessionId && response.status === 404) ||
                 (this.accessToken && response.status === 401)
-            ){
+            ) {
                 this.destroy()
                 return this.request(method, params, options)
             }
 
             const contentType = response.headers.get('Content-Type') || ''
-        
 
-            if(contentType.includes('text/event-stream')){
+            if (response.headers.has('Mcp-Session-Id') && initMethod !== 'none') {
+                this.sessionId = response.headers.get('Mcp-Session-Id')
+            }
+
+            if (contentType.includes('text/event-stream')) {
 
                 this.connectSSE(response.body, abortController)
 
 
                 const v = new Promise<RPCRequestResult>((resolve) => {
-                    const sseListener = (event:CustomEvent<SseEventDetail>) => {
-                        if(event.detail.mcpClientObjectId !== this.mcpClientObjectId) return
+                    const sseListener = (event: CustomEvent<SseEventDetail>) => {
+                        if (event.detail.mcpClientObjectId !== this.mcpClientObjectId) return
                         const data = event.detail.data
-                        if(data.id === body.id){
+                        if (data.id === body.id) {
                             document.removeEventListener("mcp-sse", sseListener)
                             resolve({
                                 rpc: data,
@@ -410,7 +426,7 @@ export class MCPClient{
                 return v
             }
 
-            if(!contentType.includes('application/json')){
+            if (!contentType.includes('application/json')) {
                 return {
                     rpc: {
                         jsonrpc: "2.0",
@@ -430,7 +446,7 @@ export class MCPClient{
                 }
             }
 
-            if(response.headers.has('Mcp-Session-Id') && initMethod !== 'none'){
+            if (response.headers.has('Mcp-Session-Id') && initMethod !== 'none') {
                 this.sessionId = response.headers.get('Mcp-Session-Id')
             }
             return {
@@ -457,15 +473,15 @@ export class MCPClient{
             }
         }
     }
-    
 
-    async getCapabilities(){
+
+    async getCapabilities() {
         await this.checkHandshake()
         return this.serverInfo?.capabilities || {}
     }
 
-    
-    async loadPrompt(mcpPrompt:MCPPrompt){
+
+    async loadPrompt(mcpPrompt: MCPPrompt) {
         await this.checkHandshake()
         const d = await this.request("prompts/get", {
             name: mcpPrompt.name
@@ -474,20 +490,19 @@ export class MCPClient{
         return d
     }
 
-    async checkHandshake(){
-        if(this.initialized){
+    async checkHandshake() {
+        if (this.initialized) {
             return this.serverInfo
-        }
-        else{
+        } else {
             return this.handshake()
         }
     }
-    
-    async handshake(){
+
+    async handshake() {
 
         console.log("MCP Handshake", this.url, this.mcpClientObjectId)
         this.protocolVersion = '2025-03-26' //default to latest version
-        let {rpc:d,http} = await this.request('initialize', {
+        let {rpc: d, http} = await this.request('initialize', {
             "protocolVersion": this.protocolVersion,
             "capabilities": {},
             "clientInfo": {
@@ -498,19 +513,19 @@ export class MCPClient{
             initMethod: 'init'
         })
 
-        if(http.status === 404){
+        if (http.status === 404) {
             console.warn("MCP: Streamed transport not supported, falling back to SSE")
             this.protocolVersion = '2024-11-05'
-            
-            const headers:Record<string, string> = {
+
+            const headers: Record<string, string> = {
                 "Accept": "text/event-stream",
             }
 
-            if(this.sessionId){
+            if (this.sessionId) {
                 headers['Mcp-Session-Id'] = this.sessionId
             }
 
-            if(this.accessToken){
+            if (this.accessToken) {
                 headers['Authorization'] = `Bearer ${this.accessToken}`
             }
 
@@ -519,17 +534,17 @@ export class MCPClient{
                 headers: headers
             })
 
-            if(connection.status !== 200){
+            if (connection.status !== 200) {
                 throw new Error(`Failed to connect to MCP server: ${connection.status} ${connection.statusText}`)
             }
 
             this.connectSSE(connection.body)
 
             const connectionResult = await (new Promise<RPCRequestResult>((resolve) => {
-                const sseListener = (event:CustomEvent<SseEventDetail>) => {
-                    if(event.detail.mcpClientObjectId !== this.mcpClientObjectId) return
+                const sseListener = (event: CustomEvent<SseEventDetail>) => {
+                    if (event.detail.mcpClientObjectId !== this.mcpClientObjectId) return
                     const data = event.detail.data
-                    if(data.id === 'connected'){
+                    if (data.id === 'connected') {
                         document.removeEventListener("mcp-sse", sseListener)
                         resolve({
                             rpc: data,
@@ -545,12 +560,12 @@ export class MCPClient{
 
             const endpoint = connectionResult.rpc.result.endpoint
 
-            if(!endpoint){
+            if (!endpoint) {
                 throw new Error("Failed to get endpoint from MCP server")
             }
 
             const baseUrl = (new URL(this.url)).origin
-            
+
 
             this.sseEndpoint = `${baseUrl}${endpoint}`
 
@@ -569,23 +584,22 @@ export class MCPClient{
             http = r.http
         }
 
-        if(http.status === 401){
+        if (http.status === 401) {
             await this.oauthLogin()
             return this.handshake()
         }
 
-        if(d?.result?.serverInfo){
+        if (d?.result?.serverInfo) {
             this.serverInfo = d.result
 
             await this.request('notifications/initialized', null, {
                 notifications: true
             })
-            
-            
-            if(d?.result?.protocolVersion !== "2025-03-26" && d?.result?.protocolVersion !== "2024-11-05"){
+
+
+            if (d?.result?.protocolVersion !== "2025-03-26" && d?.result?.protocolVersion !== "2024-11-05") {
                 console.warn("MCP Server is using an unsupported protocol version", d.result.protocolVersion)
-            }
-            else{
+            } else {
                 this.protocolVersion = d.result.protocolVersion
             }
 
@@ -593,17 +607,16 @@ export class MCPClient{
             this.initialized = true
 
             return this.serverInfo
-        }
-        else{
+        } else {
             throw "MCP Handshake Failed"
         }
     }
 
-    async oauthLogin(){
+    async oauthLogin() {
 
-        if(this.getRefreshToken){
+        if (this.getRefreshToken) {
             const refreshTokenData = await this.getRefreshToken()
-            if(refreshTokenData){
+            if (refreshTokenData) {
                 //get access token using refresh token
                 const tokenResponse = await fetchNative(refreshTokenData.tokenUrl, {
                     method: "POST",
@@ -617,7 +630,7 @@ export class MCPClient{
                         client_secret: refreshTokenData.clientSecret
                     })).toString()
                 })
-                if(tokenResponse.status !== 200){
+                if (tokenResponse.status !== 200) {
                     const tokenData = await tokenResponse.json()
                     this.accessToken = tokenData.access_token
                     return
@@ -641,7 +654,7 @@ export class MCPClient{
             'registration_endpoint': OauthDiscovery.origin + "/register",
         }
 
-        if(oauthResponse.status === 200){
+        if (oauthResponse.status === 200) {
             discoveryURLS = await oauthResponse.json()
         }
 
@@ -651,7 +664,7 @@ export class MCPClient{
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                "Accept":  "application/json"
+                "Accept": "application/json"
             },
             body: JSON.stringify({
                 client_name: "RS-MCP-CLIENT",
@@ -662,7 +675,7 @@ export class MCPClient{
             })
         })
 
-        if(registerResponse.status !== 201){
+        if (registerResponse.status !== 201) {
             throw new Error("Failed to register client with OAuth server")
         }
 
@@ -696,7 +709,7 @@ export class MCPClient{
 
         const authHelperResponseJson = await authHelperResponse.json()
 
-        if(authHelperResponseJson.success !== true){
+        if (authHelperResponseJson.success !== true) {
             throw new Error("Failed to get authorization code from helper")
         }
 
@@ -717,13 +730,13 @@ export class MCPClient{
             })).toString()
         })
 
-        if(tokenResponse.status !== 200){
+        if (tokenResponse.status !== 200) {
             throw new Error("Failed to exchange authorization code for access token")
         }
 
         const tokenData = await tokenResponse.json()
 
-        if(this.registerRefreshToken){
+        if (this.registerRefreshToken) {
             this.registerRefreshToken({
                 clientId: clientData.client_id,
                 clientSecret: clientData.client_secret,
@@ -735,36 +748,34 @@ export class MCPClient{
 
     }
 
-    async getPromptList():Promise<MCPPrompt[]>{
+    async getPromptList(): Promise<MCPPrompt[]> {
         await this.checkHandshake()
-        if(!this.serverInfo.capabilities?.prompts){
+        if (!this.serverInfo.capabilities?.prompts) {
             return []
         }
-        if(this.cached.prompts.length > 0){
+        if (this.cached.prompts.length > 0) {
             return this.cached.prompts
         }
-        let prompts:MCPPrompt[] = []
-        let cursor:string|null = null
-        while(true){
+        let prompts: MCPPrompt[] = []
+        let cursor: string | null = null
+        while (true) {
             const args = {
                 cursor: cursor
             } as Record<string, any>
 
-            if(!args.cursor){
+            if (!args.cursor) {
                 delete args.cursor
             }
 
             const response = await this.request("prompts/list", args)
-            if(response.rpc.result?.prompts){
+            if (response.rpc.result?.prompts) {
                 prompts.push(...response.rpc.result.prompts)
-                if(response.rpc.result.nextCursor){
+                if (response.rpc.result.nextCursor) {
                     cursor = response.rpc.result.nextCursor
-                }
-                else{
+                } else {
                     break
                 }
-            }
-            else{
+            } else {
                 break
             }
         }
@@ -774,37 +785,35 @@ export class MCPClient{
         return prompts
     }
 
-    async getToolList():Promise<MCPTool[]>{
+    async getToolList(): Promise<MCPTool[]> {
         await this.checkHandshake()
-        if(!this.serverInfo.capabilities?.tools){
+        if (!this.serverInfo.capabilities?.tools) {
             return []
         }
-        if(this.cached.tools.length > 0){
+        if (this.cached.tools.length > 0) {
             return this.cached.tools
         }
-        let tools:MCPTool[] = []
-        let cursor:string|null = null
-        while(true){
+        let tools: MCPTool[] = []
+        let cursor: string | null = null
+        while (true) {
             const args = {
                 cursor: cursor
             } as Record<string, any>
 
-            if(!args.cursor){
+            if (!args.cursor) {
                 delete args.cursor
             }
 
             const response = await this.request("tools/list", args)
             console.log("MCP Tools List Response", response)
-            if(response.rpc.result?.tools){
+            if (response.rpc.result?.tools) {
                 tools.push(...response.rpc.result.tools)
-                if(response.rpc.result.nextCursor){
+                if (response.rpc.result.nextCursor) {
                     cursor = response.rpc.result.nextCursor
-                }
-                else{
+                } else {
                     break
                 }
-            }
-            else{
+            } else {
                 break
             }
         }
@@ -814,9 +823,9 @@ export class MCPClient{
         return tools
     }
 
-    async callTool(toolName:string, args:any):Promise<RPCToolCallContent[]>{
+    async callTool(toolName: string, args: any): Promise<RPCToolCallContent[]> {
         await this.checkHandshake()
-        if(!this.serverInfo.capabilities?.tools){
+        if (!this.serverInfo.capabilities?.tools) {
             throw new Error("MCP Server does not support tools")
         }
 
@@ -825,23 +834,23 @@ export class MCPClient{
             arguments: args
         })
 
-        if(response.rpc.error){
+        if (response.rpc.error) {
             return [{
                 type: 'text',
                 text: `Error calling ${toolName}: ${JSON.stringify(response.rpc.error)}`
             }]
-        } 
+        }
 
         return response.rpc?.result?.content
     }
 
-    destroy(){
+    destroy() {
         this.initialized = false
         this.sessionId = null
         this.accessToken = null
         this.sseEndpoint = null
         this.sseResponses = {}
-        for(const sse of this.sses){
+        for (const sse of this.sses) {
             sse.abortController?.abort()
         }
         this.sseIdDone.clear()
@@ -849,7 +858,7 @@ export class MCPClient{
         this.onDestroy?.()
     }
 
-    ping(){
+    ping() {
         return this.request("ping")
     }
 }

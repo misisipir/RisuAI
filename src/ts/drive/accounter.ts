@@ -23,6 +23,9 @@ export async function saveRisuAccountData() {
     }
     const s = await fetch(hubURL + '/hub/account/save', {
         method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
         body: JSON.stringify({
             token: db.account.token,
             save: db.account.data
@@ -42,6 +45,9 @@ export async function loadRisuAccountData() {
     }
     const s = await fetch(hubURL + '/hub/account/load', {
         method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
         body: JSON.stringify({
             token: db.account.token
         })

@@ -4,7 +4,7 @@
 
     let open = $state(false)
     interface Props {
-        name?: string;
+        name?: string
         styled?: boolean;
         help?: (keyof (typeof language.help))|'';
         disabled?: boolean;

@@ -14,7 +14,8 @@ import { addFetchLog } from "src/ts/globalApi.svelte"
 type GeminiFunctionCall = {
     id?: string;
     name: string;
-    args: any
+    args: any;
+    thoughtSignature?: string;
 }
 
 type GeminiFunctionResponse = {
@@ -29,6 +30,7 @@ interface GeminiPart{
         "mimeType": string,
         "data": string
     },
+    thoughtSignature?: string
     functionCall?: GeminiFunctionCall
     functionResponse?: GeminiFunctionResponse
 }
@@ -210,7 +212,8 @@ export async function requestGoogleCloudVertex(arg:RequestDataArgumentExtended):
                                     functionCall: {
                                         name: segment.call.call.name,
                                         args: segment.call.call.arg
-                                    }
+                                    },
+                                    thoughtSignature: segment.call.thoughtSignature
                                 }]
                             })
                             insertIndex++
@@ -516,8 +519,10 @@ export async function requestGoogleCloudVertex(arg:RequestDataArgumentExtended):
     return requestGoogle(url, body, headers, arg)
 }
 
-async function requestGoogle(url:string, body:any, headers:{[key:string]:string}, arg:RequestDataArgumentExtended):Promise<requestDataResponse> {
-    
+async function requestGoogle(url: string, body: any, headers: {
+    [key: string]: string
+}, arg: RequestDataArgumentExtended): Promise<requestDataResponse> {
+
     const db = getDatabase()
 
     if(experimental) {
@@ -661,8 +666,10 @@ async function requestGoogle(url:string, body:any, headers:{[key:string]:string}
                     rDatas.push(part.text)
                 }
 
-                if(part.functionCall){
-                    calls.push(part.functionCall as GeminiFunctionCall)
+                if (part.functionCall) {
+                    const fc = part.functionCall as GeminiFunctionCall;
+                    if (part.thoughtSignature) fc.thoughtSignature = part.thoughtSignature
+                    calls.push(fc)
                 }
 
                 if(part.inlineData){
@@ -740,20 +747,21 @@ async function requestGoogle(url:string, body:any, headers:{[key:string]:string}
             chat.push({
                 role: 'model',
                 parts: rDatas
-                .map((text) => {
-                    return {text: text} as GeminiPart
-                })
-                .filter((part) => part.text?.trim())
-                .concat(
-                    calls.map((call) => {
-                    return {
-                        functionCall: {
-                            //id: call.id,
-                            name: call.name,
-                            args: call.args
-                        }
-                    } as GeminiPart
-                }))
+                    .map((text) => {
+                        return {text: text} as GeminiPart
+                    })
+                    .filter((part) => part.text?.trim())
+                    .concat(
+                        calls.map((call) => {
+                            return {
+                                functionCall: {
+                                    //id: call.id,
+                                    name: call.name,
+                                    args: call.args
+                                },
+                                thoughtSignature: call.thoughtSignature
+                            } as GeminiPart
+                        }))
             })
         }
         // If the last part is a model response, merge it with the previous model response
@@ -978,6 +986,7 @@ function wrapToolStream(
                                             name: call.name,
                                             args: call.args
                                         }
+                                        , thoughtSignature: call.thoughtSignature
                                     } as GeminiPart
                                 })
                             })
@@ -987,16 +996,17 @@ function wrapToolStream(
                             chat.push({
                                 role: 'model',
                                 parts: [{text: content} as GeminiPart]
-                                .concat(
-                                    calls.map((call) => {
-                                    return {
-                                        functionCall: {
-                                            //id: call.id,
-                                            name: call.name,
-                                            args: call.args
-                                        }
-                                    } as GeminiPart
-                                }))
+                                    .concat(
+                                        calls.map((call) => {
+                                            return {
+                                                functionCall: {
+                                                    //id: call.id,
+                                                    name: call.name,
+                                                    args: call.args
+                                                }
+                                                , thoughtSignature: call.thoughtSignature
+                                            } as GeminiPart
+                                        }))
                             })
                         }
                         // If the last part is a model response, merge it with the previous model response
