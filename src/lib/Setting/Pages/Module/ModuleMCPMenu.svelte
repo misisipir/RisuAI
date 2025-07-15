@@ -364,7 +364,7 @@
                         </button>
                     </div>
                     <span>Tool description</span>
-                    <TextInput bind:value={tool.description} className="w-full" placeholder="Tool Description"/>
+                    <TextAreaInput bind:value={tool.description} className="w-full" placeholder="Tool Description"/>
                     <span>Tool functionName</span>
                     <TextInput bind:value={tool.functionName} className="w-full" placeholder="Function Name"/>
                     <span>Tool inputSchema</span>

@@ -12,6 +12,8 @@
     import { tokenizeAccurate } from "src/ts/tokenizer";
   import { DBState } from "src/ts/stores.svelte";
   import LoreBookList from "./LoreBookList.svelte";
+    import {sleep} from "src/ts/util";
+    import {risuChatParser} from "src/ts/parser.svelte";
 
     interface Props {
         value: loreBook;
@@ -41,6 +43,20 @@
         return tokens
     }
     let tokens = $state(0)
+    let output = $state(risuChatParser(value.content || '', {
+        consistantChar: true,
+    }))
+
+    const onInput = async () => {
+        try {
+            await sleep(1)
+            output = risuChatParser(value.content, {
+                consistantChar: true,
+            })
+        } catch (e) {
+            output = `Error: ${e}`
+        }
+    }
 
     function isLocallyActivated(book: loreBook){
         return book.id ? getCurrentChat()?.localLore.some(e => e.id === book.id) : false
@@ -239,6 +255,8 @@
             {/if}
             <span class="text-textcolor mt-4 mb-2">{language.prompt}</span>
             <TextAreaInput highlight autocomplete="off" bind:value={value.content} />
+            <span class="text-textcolor2 mt-2 mb-2 text-sm flex gap-5 items-center"><span>Result</span> <button class="text-sm p-1 border rounded-md border-darkborderc" onclick={onInput}>미리보기</button> </span>
+            <TextAreaInput value={output} disabled />
             {#await getTokens(value.content)}
                 <span class="text-textcolor2 mt-2 mb-2 text-sm">{tokens} {language.tokens}</span>
             {:then e}

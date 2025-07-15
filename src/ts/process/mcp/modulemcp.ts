@@ -23,6 +23,7 @@ export class ModuleMCP extends MCPClientLike {
         instructions: string
         codeType: 'lua' | 'py'
         commonCode?: string
+        disableTools?: {[key: string]: boolean}
         tools: {
             [key: string]: (MCPTool & {
                 functionName: string
@@ -33,6 +34,7 @@ export class ModuleMCP extends MCPClientLike {
         super(url);
         const {name, version, instructions, tools} = args;
         this.tools = tools || {};
+        this.disableTools = args.disableTools || {};
         this.codeType = args.codeType || 'lua';
         this.commonCode = args.commonCode || '';
         this.serverInfo.serverInfo.name = name;
