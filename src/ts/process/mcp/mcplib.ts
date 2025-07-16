@@ -137,7 +137,7 @@ export class MCPClient {
     } = {}) {
         this.url = url
         if (arg.disableTools) {
-            this.disableTools = arg.disableTools
+            this.disabledTools = arg.disableTools
         }
         if (arg.accessToken) {
             this.accessToken = arg.accessToken
@@ -145,10 +145,10 @@ export class MCPClient {
     }
 
     isDisableTools(tool:string) {
-        if (this.disableTools[tool] === undefined ) {
+        if (this.disabledTools[tool] === undefined ) {
             return true;
         }
-        return this.disableTools[tool];
+        return this.disabledTools[tool];
     }
 
     async connectSSE(stream: ReadableStream, abortController?: AbortController) {

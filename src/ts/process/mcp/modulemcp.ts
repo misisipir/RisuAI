@@ -23,7 +23,7 @@ export class ModuleMCP extends MCPClientLike {
         instructions: string
         codeType: 'lua' | 'py'
         commonCode?: string
-        disableTools?: {[key: string]: boolean}
+        disabledTools?: {[key: string]: boolean}
         tools: {
             [key: string]: (MCPTool & {
                 functionName: string
@@ -34,7 +34,7 @@ export class ModuleMCP extends MCPClientLike {
         super(url);
         const {name, version, instructions, tools} = args;
         this.tools = tools || {};
-        this.disableTools = args.disableTools || {};
+        this.disabledTools = args.disabledTools || {};
         this.codeType = args.codeType || 'lua';
         this.commonCode = args.commonCode || '';
         this.serverInfo.serverInfo.name = name;
@@ -52,8 +52,8 @@ export class ModuleMCP extends MCPClientLike {
     }
 
     isDisableTools(tool: string) {
-        if (!this.disableTools || this.disableTools[tool] === undefined) return true;
-        return this.disableTools[tool];
+        if (!this.disabledTools || this.disabledTools[tool] === undefined) return true;
+        return this.disabledTools[tool];
     }
 
     async callTool(toolName: string, args: any): Promise<RPCToolCallContent[]> {

@@ -42,6 +42,7 @@ export async function initializeMCPs(additionalMCPs?: string[]) {
                 }
                 MCPs[mcp] = new ModuleMCP(mcp, {
                     tools: tools,
+                    disabledTools: mcpModule?.mcp?.disabledTools || {},
                     commonCode: mcpModule?.mcp?.commonCode || '',
                     codeType: mcpModule?.mcp?.codeType || 'lua',
                     name: mcpModule?.name || 'Module MCP',
@@ -299,7 +300,9 @@ export async function importMCPModule() {
             description: "MCP from " + x,
             mcp: {
                 url: x,
-                disabledTools: {}
+                disabledTools: {},
+                codeType: "lua",
+                commonCode: "",
             },
             id: v4(),
             lorebook: [{

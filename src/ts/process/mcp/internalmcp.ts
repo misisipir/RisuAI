@@ -7,7 +7,7 @@ import {runScripted} from "../scriptings";
 //Original MCPClient is located in src/ts/process/mcp/mcplib.ts
 export class MCPClientLike {
     url: string;
-    disableTools?: {
+    disabledTools?: {
         [toolName: string]: boolean;
     }
     serverInfo: {
@@ -45,8 +45,8 @@ export class MCPClientLike {
     }
 
     isDisableTools(tool:string) {
-        if ( this.disableTools[tool] === undefined ) return true;
-        return this.disableTools[tool];
+        if ( this.disabledTools[tool] === undefined ) return true;
+        return this.disabledTools[tool];
     }
 
 
